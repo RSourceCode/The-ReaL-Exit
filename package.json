@@ -1,0 +1,47 @@
+{
+  "name": "the-real-exit",
+  "version": "0.1.0",
+  "description": "Build and play your own The-ReaL-Exit levels",
+  "private": true,
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "start": "node desktop/launch.cjs",
+    "desktop": "node desktop/launch.cjs",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "electron": "^45.2.1",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.worldforge.game",
+    "productName": "The-ReaL-Exit",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "index.html",
+      "desktop/**/*",
+      "backend/**/*",
+      "node_modules/three/**/*",
+      "node_modules/@dimforge/rapier3d-compat/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.21.0",
+    "three": "^0.187.0"
+  }
+}
