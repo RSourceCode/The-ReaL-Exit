@@ -1,0 +1,242 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0b1220" />
+  <title>The-ReaL-Exit — Build & Play</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap');
+    :root{color-scheme:dark;--bg:#0b1220;--panel:#101a2b;--line:#25334a;--muted:#92a3bb;--text:#f1f5fa;--mint:#65e0bd;--gold:#ffc968;--red:#ff7784}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 52% -20%,#20334b 0%,var(--bg) 55%);color:var(--text);font-family:Manrope,system-ui,sans-serif;min-height:100vh}
+    button{font:inherit;color:inherit;cursor:pointer}button:disabled{opacity:.48;cursor:not-allowed}.app{max-width:1440px;margin:auto;padding:26px 34px 22px;min-height:100vh;display:flex;flex-direction:column}
+    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}.brand{display:flex;gap:12px;align-items:center}.mark{width:38px;height:38px;border:1px solid #3c6a70;background:linear-gradient(145deg,#183b48,#162538);border-radius:12px;display:grid;place-items:center;color:var(--mint);font-size:21px}.brand strong{font-size:15px;letter-spacing:.13em}.brand small{display:block;color:var(--muted);font-size:10px;letter-spacing:.17em;margin-top:2px}.head-right{display:flex;align-items:center;gap:12px}.status{color:var(--mint);font:11px 'DM Mono',monospace;letter-spacing:.08em;display:flex;gap:8px;align-items:center}.dot{width:7px;height:7px;background:var(--mint);border-radius:100%;box-shadow:0 0 12px #65e0bd88}.icon-btn{border:1px solid var(--line);background:#111c2d;border-radius:10px;width:38px;height:38px;color:#adbad0}
+    .layout{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:20px;flex:1;min-height:550px}.main{display:flex;flex-direction:column;min-width:0}.title-row{display:flex;align-items:flex-end;justify-content:space-between;padding:0 2px 15px}.eyebrow{font:10px 'DM Mono',monospace;color:var(--mint);letter-spacing:.17em;text-transform:uppercase}.title-row h1{font-size:25px;margin:5px 0 0;letter-spacing:-.04em}.run-stats{display:flex;gap:22px}.stat{font-size:11px;color:var(--muted)}.stat b{display:block;color:var(--text);font:16px 'DM Mono',monospace;margin-top:2px}
+    .game-card{position:relative;flex:1;min-height:430px;border:1px solid #263650;border-radius:17px;background:#0c1727;overflow:hidden;box-shadow:0 24px 80px #03081288}.game-top{position:absolute;top:16px;left:18px;z-index:2;display:flex;align-items:center;gap:9px}.pill{font:10px 'DM Mono',monospace;letter-spacing:.1em;border:1px solid #314158;background:#111e30dd;padding:7px 10px;border-radius:7px;color:#c6d3e5}.pill.active{color:var(--mint);border-color:#3d776e}.canvas-wrap{position:absolute;inset:0;background:radial-gradient(ellipse at 50% 52%,#183048 0%,#101e31 50%,#0b1423 100%)}#world3d{position:absolute;inset:0;overflow:hidden;touch-action:none}#world3d canvas{width:100%;height:100%;display:block;outline:none}.toast{position:absolute;top:65px;left:50%;transform:translateX(-50%);z-index:4;background:#102233ef;border:1px solid #4d8f83;border-radius:9px;padding:10px 15px;color:#dffbf3;font-size:12px;opacity:0;transition:opacity .2s;pointer-events:none;white-space:nowrap}.toast.show{opacity:1}.game-bottom{position:absolute;bottom:16px;left:18px;right:18px;display:flex;justify-content:space-between;align-items:end;pointer-events:none}.objective{background:#101d2cdd;border:1px solid #304057;border-radius:10px;padding:10px 13px;font-size:11px;color:#d5e0ed}.objective small{display:block;color:var(--muted);font-size:9px;letter-spacing:.12em;margin-bottom:4px}.controls-hint{color:#d0d9e6;font:10px 'DM Mono',monospace;text-align:right;text-shadow:0 2px 5px #000;background:#0d1829b8;padding:8px 10px;border-radius:8px}
+    .toolbar{display:flex;justify-content:space-between;gap:10px;padding-top:13px}.tool-group{display:flex;gap:7px;align-items:center}.tool{border:1px solid var(--line);background:#111c2d;color:#aab8cb;border-radius:9px;padding:9px 12px;font-size:11px;transition:.15s}.tool:hover,.tool.selected{border-color:#4ca48f;color:#d9fff2;background:#132b30}.tool.primary{color:#081b1b;background:var(--mint);border-color:var(--mint);font-weight:800;padding:9px 20px}.tool.primary:hover{background:#8bf0d4}.tool.secondary{background:#19263a;color:#dbe5f1}
+    aside{border:1px solid var(--line);background:linear-gradient(155deg,#111d30,#0d1726);border-radius:16px;padding:19px 17px;display:flex;flex-direction:column;gap:20px}.panel-head{display:flex;align-items:center;justify-content:space-between}.panel-head h2{font-size:13px;margin:0;letter-spacing:.01em}.panel-head span{font:10px 'DM Mono',monospace;color:var(--muted)}.section{border-bottom:1px solid #223047;padding-bottom:16px}.section:last-child{border:0;padding:0}.label{font:9px 'DM Mono',monospace;color:#8799b2;letter-spacing:.15em;text-transform:uppercase;margin-bottom:11px}.tool-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px}.tile-tool{background:#142136;border:1px solid #283952;border-radius:9px;padding:10px 9px;text-align:left;color:#c0cede;font-size:11px}.tile-tool em{font-style:normal;font-size:15px;margin-right:7px}.tile-tool.selected{border-color:#4b9b88;background:#17302f;color:#e2fff6}.objective-row{display:flex;align-items:center;gap:10px;margin:10px 0;font-size:11px;color:#c7d3e3}.check{height:16px;width:16px;display:grid;place-items:center;border-radius:5px;background:#17372f;color:var(--mint);font-size:10px}.progress{margin-top:12px;background:#1d2b40;border-radius:4px;height:5px;overflow:hidden}.progress i{display:block;width:0;height:100%;background:linear-gradient(90deg,#46b997,#8ae5bf);transition:width .3s}.progress-note{color:#95a6bd;font-size:10px;margin-top:7px}.world-row{display:flex;justify-content:space-between;align-items:center;color:#c7d3e3;font-size:11px;margin-top:10px}.world-row span{color:#8394aa;font:10px 'DM Mono',monospace}.keycap{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 4px;border:1px solid #3c4d65;border-radius:5px;background:#19273b;color:#d5deea;font:10px 'DM Mono',monospace;margin-right:3px}.side-foot{margin-top:auto;color:#75869c;font-size:9px;line-height:1.7;border-top:1px solid #223047;padding-top:12px}
+    @media(max-width:900px){.layout{grid-template-columns:1fr}.layout aside{display:grid;grid-template-columns:1fr 1fr}.side-foot{grid-column:1/-1}.game-card{min-height:460px}}
+    @media(max-width:580px){.app{padding:17px 13px}.brand strong{font-size:13px}.status{display:none}.layout aside{display:flex}.title-row{align-items:start;gap:10px;flex-direction:column}.run-stats{gap:16px}.game-card{min-height:390px}.toolbar{flex-wrap:wrap}.tool-group{width:100%;justify-content:space-between}.tool{padding:8px}.tool.primary{flex:1}.controls-hint{font-size:8px}}
+    /* Desktop app shell */
+    body{min-height:100vh;overflow:hidden;background:#09111e}
+    .desktop-shell{display:grid;grid-template-columns:226px minmax(0,1fr);height:100vh;min-height:620px;background:radial-gradient(ellipse at 70% -15%,#1c3045 0%,#0b1422 46%,#09111e 100%)}
+    .sidebar{display:flex;flex-direction:column;padding:23px 14px 16px;background:#0b1422;border-right:1px solid #1d2a3c;min-width:0}
+    .sidebar .brand{padding:0 9px 28px}.sidebar .brand strong{font-size:13px}.sidebar .brand small{font-size:8px}
+    .nav-label{font:9px 'DM Mono',monospace;letter-spacing:.16em;color:#697c95;padding:0 11px 9px;text-transform:uppercase}
+    .nav-list{display:grid;gap:5px}.nav-btn{display:flex;align-items:center;gap:12px;width:100%;padding:11px 12px;border:1px solid transparent;border-radius:9px;background:transparent;color:#91a2b9;text-align:left;font-size:12px;transition:.16s}
+    .nav-btn:hover{background:#121f31;color:#e1e9f2}.nav-btn.active{background:linear-gradient(100deg,#15302f,#122230);border-color:#2e625d;color:#cffff1}.nav-icon{width:18px;text-align:center;font-size:15px;color:#9bb0c8}.nav-btn.active .nav-icon{color:var(--mint)}
+    .nav-badge{margin-left:auto;border:1px solid #35465c;border-radius:5px;padding:3px 5px;color:#93a7bf;font:8px 'DM Mono',monospace;letter-spacing:.05em}
+    .sidebar-bottom{margin-top:auto}.profile{display:flex;align-items:center;gap:10px;padding:13px 9px 0;border-top:1px solid #1f2d41}.avatar{width:30px;height:30px;display:grid;place-items:center;border-radius:9px;background:linear-gradient(145deg,#314e62,#1b3440);color:#aef2db;font-size:11px;font-weight:800}.profile strong{display:block;font-size:10px}.profile small{display:block;color:#788ba3;font-size:9px;margin-top:2px}
+    .app-main{min-width:0;display:flex;flex-direction:column;height:100vh;overflow:auto}.topbar{height:66px;min-height:66px;padding:0 30px;margin:0;border-bottom:1px solid #1c293a;display:flex;align-items:center;justify-content:space-between;background:#0b1422c9}.crumb{color:#91a3ba;font-size:11px}.crumb b{color:#e4ebf4;font-weight:600}.top-actions{display:flex;align-items:center;gap:11px}.top-status{font:9px 'DM Mono',monospace;color:#8fa4b9;letter-spacing:.1em}.top-status i{display:inline-block;width:6px;height:6px;background:var(--mint);border-radius:50%;margin:0 7px 1px 0;box-shadow:0 0 10px #65e0bd66}.top-icon{width:34px;height:34px;border:1px solid #28374b;background:#111d2d;border-radius:9px;color:#a9b8ca}
+    .content{padding:26px 30px 32px;min-height:0}.app-page{display:none;max-width:1380px;margin:auto;animation:page-in .2s ease}.app-page.active{display:block}@keyframes page-in{from{opacity:.55;transform:translateY(4px)}to{opacity:1;transform:none}}
+    .page-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin:0 0 21px}.page-heading h1{font-size:25px;letter-spacing:-.045em;margin:5px 0 0}.page-heading p{color:#8da0b8;font-size:12px;margin:7px 0 0}.eyebrow{font-size:9px}.button-row{display:flex;gap:8px;align-items:center}
+    .home-hero{position:relative;overflow:hidden;min-height:270px;padding:33px 36px;border:1px solid #30465e;border-radius:18px;background:linear-gradient(112deg,#182c3d 0%,#142439 49%,#173b42 100%);display:flex;align-items:center;box-shadow:0 24px 70px #03081255}.home-hero:before,.home-hero:after{content:"";position:absolute;pointer-events:none}.home-hero:before{width:360px;height:360px;right:6%;top:-135px;border:1px solid #71d8bb22;border-radius:50%;box-shadow:0 0 0 32px #65e0bd08,0 0 0 72px #65e0bd06}.home-hero:after{width:210px;height:210px;right:14%;top:27px;transform:rotate(45deg);border:1px solid #65e0bd33;background:linear-gradient(135deg,#65e0bd0c,transparent 58%);border-radius:22px}
+    .hero-copy{position:relative;z-index:1;max-width:510px}.hero-copy h1{font-size:35px;line-height:1.13;letter-spacing:-.055em;margin:9px 0 12px}.hero-copy p{max-width:440px;color:#b0bfd0;font-size:13px;line-height:1.7;margin:0 0 21px}.hero-art{position:absolute;z-index:1;right:13%;bottom:16px;width:190px;height:100px;transform:rotate(-27deg) skew(27deg);background:linear-gradient(135deg,#35566a,#20364b);border:1px solid #5ba18e55;box-shadow:19px 19px 0 #102435,39px 39px 0 #0b1a29;border-radius:8px;opacity:.75}.hero-art:after{content:"✦";position:absolute;left:48%;top:-42px;transform:skew(-27deg) rotate(27deg);font-size:46px;color:#ffd478;text-shadow:0 0 22px #ffc968aa}
+    .home-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:17px 0 27px}.home-stat,.surface-card{border:1px solid #27364b;background:linear-gradient(145deg,#111e30,#0e1928);border-radius:13px}.home-stat{padding:15px 17px}.home-stat .label{margin-bottom:8px}.home-stat strong{font:21px 'DM Mono',monospace}.home-stat small{display:block;color:#788ba3;font-size:9px;margin-top:5px}
+    .section-title{display:flex;justify-content:space-between;align-items:center;margin:0 0 13px}.section-title h2{font-size:14px;margin:0}.text-link{border:0;background:none;color:var(--mint);font-size:10px}.home-grid{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(260px,1fr);gap:14px}.recent-card{display:flex;align-items:center;gap:16px;padding:14px}.world-thumb{width:126px;min-width:126px;height:91px;border-radius:9px;border:1px solid #3d5967;background:radial-gradient(ellipse at 50% 50%,#315665,#122a3a 70%);position:relative;overflow:hidden}.world-thumb:before{content:"";position:absolute;width:100px;height:55px;left:13px;top:18px;transform:rotate(30deg) skew(-25deg);background:repeating-linear-gradient(0deg,#53777e 0 1px,transparent 1px 17px),repeating-linear-gradient(90deg,#53777e 0 1px,transparent 1px 17px);opacity:.7}.world-thumb:after{content:"✦";position:absolute;left:58px;top:24px;color:var(--gold);text-shadow:0 0 12px var(--gold)}.recent-info{min-width:0}.recent-info h3{font-size:12px;margin:0 0 5px}.recent-info p{font-size:10px;color:#879ab2;margin:0 0 12px}.recent-actions{display:flex;align-items:center;gap:9px}.mini-meta{color:#71849b;font:9px 'DM Mono',monospace}
+    .quick-stack{display:grid;gap:10px}.quick-card{padding:15px 16px;display:flex;align-items:center;gap:13px}.quick-icon{width:36px;height:36px;border-radius:10px;background:#17312f;color:var(--mint);display:grid;place-items:center;font-size:17px}.quick-card h3{font-size:11px;margin:0 0 4px}.quick-card p{font-size:9px;color:#8598af;margin:0}.quick-arrow{margin-left:auto;color:#879bb2}
+    #world-page .page-heading{margin-bottom:15px}.world-controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.segmented{display:flex;gap:3px;padding:3px;border:1px solid #29394e;background:#0d1928;border-radius:9px}.seg-btn{border:0;border-radius:6px;background:transparent;padding:7px 10px;color:#8fa1b8;font-size:10px}.seg-btn.active{background:#1a2c3e;color:#e5f0fa;box-shadow:inset 0 0 0 1px #364a61}.view-btn{padding:7px 9px}.view-btn.active{color:#aef3de;background:#16302f;box-shadow:inset 0 0 0 1px #39796b}
+    .layout{min-height:510px;height:calc(100vh - 200px)}.game-card{min-height:0}.layout aside{max-height:100%;overflow:auto}.game-bottom{z-index:2}.mode-caption{font:9px 'DM Mono',monospace;color:#91a5bc}.disabled-card{opacity:.58;filter:saturate(.6)}
+    .library-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}.library-card{overflow:hidden}.library-art{height:148px;position:relative;background:radial-gradient(ellipse at 50% 55%,#294b58,#142337 67%,#101a29)}.library-art:before{content:"";position:absolute;left:50%;top:52%;width:170px;height:90px;transform:translate(-50%,-50%) rotate(30deg) skew(-25deg);background:repeating-linear-gradient(0deg,#607d7b 0 1px,transparent 1px 22px),repeating-linear-gradient(90deg,#607d7b 0 1px,transparent 1px 22px);opacity:.65}.library-art:after{content:"✦";position:absolute;left:54%;top:38%;color:var(--gold);font-size:20px;text-shadow:0 0 16px var(--gold)}.library-copy{padding:15px}.library-copy h3{font-size:12px;margin:0 0 5px}.library-copy p{font-size:10px;color:#899bb2;margin:0 0 13px}.library-meta{display:flex;justify-content:space-between;color:#7488a1;font:9px 'DM Mono',monospace}
+    .preview-banner{border:1px solid #574b37;background:linear-gradient(105deg,#302a20,#1e2330);border-radius:13px;padding:16px 18px;display:flex;align-items:center;gap:13px;margin-bottom:18px}.preview-banner .quick-icon{background:#42351f;color:var(--gold)}.preview-banner strong{font-size:12px}.preview-banner p{margin:4px 0 0;color:#b2a58f;font-size:10px}.preview-label{margin-left:auto;font:9px 'DM Mono',monospace;letter-spacing:.1em;color:#e5c679;border:1px solid #7c6735;padding:6px 8px;border-radius:6px}.lab-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:13px}.lab-card{padding:18px}.lab-card h3{font-size:12px;margin:0 0 7px}.lab-card p{font-size:10px;color:#8da0b7;line-height:1.6;margin:0}.lab-metric{margin-top:17px;border-top:1px solid #25334a;padding-top:13px;color:#657a93;font:9px 'DM Mono',monospace}.fake-chart{height:150px;margin-top:18px;border-radius:9px;background:linear-gradient(180deg,#17283a,#111d2c);position:relative;overflow:hidden}.fake-chart:before{content:"";position:absolute;inset:20px 14px;background:linear-gradient(180deg,transparent 32%,#28394c 33%,transparent 34%,transparent 65%,#28394c 66%,transparent 67%);border-bottom:1px solid #34485d}.fake-chart:after{content:"";position:absolute;left:14px;right:14px;bottom:23px;height:70px;background:linear-gradient(158deg,transparent 0 10%,#65e0bd 11% 12%,transparent 13% 24%,#65e0bd 25% 26%,transparent 27% 38%,#65e0bd 39% 40%,transparent 41% 47%,#65e0bd 48% 49%,transparent 50% 60%,#65e0bd 61% 62%,transparent 63%);opacity:.35}
+    .settings-grid{display:grid;grid-template-columns:220px minmax(0,1fr);gap:16px}.settings-nav{padding:8px}.settings-nav button{display:block;width:100%;text-align:left;border:0;background:transparent;border-radius:7px;padding:10px;color:#8ea0b8;font-size:10px}.settings-nav button.active{background:#192a3c;color:#e0eaf3}.settings-panel{padding:20px}.setting-row{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:15px 0;border-bottom:1px solid #243247}.setting-row:last-child{border:0}.setting-row strong{display:block;font-size:11px}.setting-row small{display:block;color:#8092a9;font-size:9px;margin-top:4px}.setting-select{background:#111f31;border:1px solid #33445a;border-radius:7px;color:#d4deeb;padding:8px 10px;font:10px 'DM Mono',monospace}
+    .placeholder{min-height:310px;display:grid;place-items:center;text-align:center;padding:35px}.placeholder .quick-icon{margin:0 auto 15px;width:48px;height:48px}.placeholder h2{font-size:16px;margin:0 0 8px}.placeholder p{max-width:420px;color:#91a3ba;font-size:11px;line-height:1.7;margin:0 auto}
+    @media(max-width:1050px){.desktop-shell{grid-template-columns:72px minmax(0,1fr)}.sidebar{padding-inline:9px}.sidebar .brand{justify-content:center;padding:0 0 24px}.sidebar .brand>div:last-child,.nav-label,.nav-text,.nav-badge,.profile>div:last-child{display:none}.nav-btn{justify-content:center;padding:12px 6px}.nav-icon{font-size:17px}.profile{justify-content:center;padding-inline:0}.home-grid{grid-template-columns:1fr}.quick-stack{grid-template-columns:repeat(2,1fr)}}
+    @media(max-width:720px){body{overflow:auto}.desktop-shell{display:block;height:auto;min-height:100vh}.sidebar{position:sticky;top:0;z-index:10;height:62px;width:100%;display:flex;flex-direction:row;align-items:center;padding:7px 12px;border-right:0;border-bottom:1px solid #243247;overflow-x:auto}.sidebar .brand{padding:0 9px 0 0}.sidebar .brand>div:last-child{display:block}.sidebar .nav-label,.sidebar-bottom .nav-label,.sidebar-bottom .profile{display:none}.sidebar-bottom{display:block;margin:0}.nav-list{display:flex;flex:none;justify-content:flex-end;gap:2px}.nav-btn{width:auto;padding:9px 10px}.nav-text{display:inline}.nav-icon{width:auto;font-size:13px}.app-main{height:auto;min-height:calc(100vh - 62px);overflow:visible}.topbar{height:52px;min-height:52px;padding:0 14px}.content{padding:18px 13px}.home-hero{min-height:240px;padding:23px}.hero-copy h1{font-size:28px}.hero-art{right:3%;opacity:.35}.home-stats{grid-template-columns:repeat(2,1fr)}.layout{height:auto;display:flex;flex-direction:column}.game-card{height:440px;flex:none}.layout aside{max-height:none}.world-controls{justify-content:flex-start}.page-heading{align-items:flex-start;flex-direction:column}.lab-grid{grid-template-columns:1fr}.settings-grid{grid-template-columns:1fr}.settings-nav{display:flex;overflow:auto}.settings-nav button{white-space:nowrap}}
+    .rl-layout{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(300px,1fr);gap:14px;align-items:start}.rl-card{padding:18px}.rl-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}.rl-field{display:grid;gap:6px;color:#aebdd0;font-size:10px}.rl-field input,.rl-field select{width:100%;border:1px solid #304057;border-radius:7px;background:#0d1928;padding:9px 10px;color:#e1eaf5;font:10px 'DM Mono',monospace}.rl-description{font-size:10px;line-height:1.6;color:#8da0b7;margin:10px 0 0}.rl-subhead{margin-top:19px}.rl-actions{display:flex;flex-wrap:wrap;gap:7px}.rl-actions span{border:1px solid #2a3a50;background:#142136;border-radius:6px;padding:7px 9px;color:#becadd;font:9px 'DM Mono',monospace}.rl-controls{display:flex;flex-wrap:wrap;gap:7px;margin-top:17px}.rl-controls .tool{padding:8px 10px}.rl-status{display:flex;align-items:center;gap:8px;color:#9aabc0;font:9px 'DM Mono',monospace;margin-top:17px}.rl-status-dot{width:7px;height:7px;border-radius:50%;background:#72859c}.rl-status-dot.running{background:#65e0bd;box-shadow:0 0 10px #65e0bd88}.rl-status-dot.paused{background:#ffc968}.rl-status-dot.error{background:#ff7784}#rlProgressPercent{margin-left:auto}.rl-progress{height:5px;background:#1c2b3f;border-radius:8px;overflow:hidden;margin-top:8px}.rl-progress i{display:block;width:0;height:100%;background:linear-gradient(90deg,#43b594,#8be8c3);transition:width .2s}.rl-side{display:grid;gap:14px}.rl-metrics{display:grid;grid-template-columns:1fr 1fr;gap:12px}.rl-metrics>div{border:1px solid #24364d;border-radius:9px;padding:11px;background:#0d1827}.rl-metrics small{display:block;color:#8397b0;font:8px 'DM Mono',monospace;letter-spacing:.08em}.rl-metrics b{display:block;margin-top:6px;color:#eef5fa;font:16px 'DM Mono',monospace}.rl-chart-wrap{height:180px;margin-top:14px;border:1px solid #24364d;border-radius:9px;background:linear-gradient(180deg,#142337,#0d1726);overflow:hidden}.rl-chart-wrap canvas{width:100%;height:100%;display:block}.rl-chart-legend{display:flex;justify-content:space-between;margin-top:8px;color:#8397b0;font:8px 'DM Mono',monospace}.rl-chart-legend span:first-child{color:#65e0bd}.rl-evaluation-title{font-size:12px;margin:2px 0 7px}.rl-evaluation-title.success{color:#65e0bd}.rl-evaluation-title.failure{color:#ffc968}
+    .rl-live-bar{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:2px 0 10px}.rl-live-bar strong{font-size:10px;color:#dbe6f1}.rl-live-bar label{display:flex;align-items:center;gap:6px;color:#9aabc0;font:8px 'DM Mono',monospace}.rl-live-bar input{accent-color:#65e0bd}.rl-view-wrap{height:238px;position:relative;overflow:hidden;border:1px solid #263b50;border-radius:10px;background:#101b29;margin-bottom:13px}#rlViewer{position:absolute;inset:0;touch-action:none}#rlViewer canvas{width:100%;height:100%;display:block}#rlViewerStatus{position:absolute;left:9px;bottom:8px;padding:6px 8px;border-radius:6px;background:#0b1422d9;color:#d5e3ed;font:8px 'DM Mono',monospace;pointer-events:none}
+    @media(max-width:1000px){.rl-layout{grid-template-columns:1fr}.rl-side{grid-template-columns:1fr 1fr}}
+    @media(max-width:720px){.rl-side{grid-template-columns:1fr}.rl-form-grid{grid-template-columns:1fr}}
+  </style>
+  <style>
+    body.world-focus .sidebar, body.world-focus .topbar, body.world-focus #world-page > .page-heading, body.world-focus #world-page aside, body.world-focus #world-page .toolbar { display:none !important; }
+    body.world-focus .desktop-shell, body.world-focus .app-main, body.world-focus .content, body.world-focus #world-page, body.world-focus .layout, body.world-focus .main, body.world-focus .game-card { display:block; width:100%; height:100vh; min-height:0; max-height:none; margin:0; padding:0; border:0; border-radius:0; overflow:hidden; }
+    body.world-focus #world-page .game-top { top:18px; left:20px; }
+    body.world-focus .game-bottom { bottom:20px; left:20px; right:20px; }
+    body.world-focus .game-card { position:fixed; inset:0; z-index:1000; }
+    body.world-focus.world-build-focus #world-page aside { display:flex !important; position:fixed; right:14px; top:62px; bottom:14px; width:300px; max-height:none; overflow:auto; z-index:1002; background:#0d1726ed; backdrop-filter:blur(14px); }
+    body.world-focus.world-build-focus #world-page .game-top { right:18px; }
+    #fullscreenBtn { pointer-events:auto; cursor:pointer; }
+    .level-list{display:grid;gap:6px;max-height:150px;overflow:auto}.level-select{width:100%;text-align:left;border:1px solid #283952;border-radius:7px;background:#142136;padding:8px 10px;color:#aebdd0;font:10px 'DM Mono',monospace}.level-select.active{border-color:#4b9b88;background:#17302f;color:#e2fff6}.standalone-toggle{display:flex;align-items:center;gap:8px;margin-top:12px}
+    .completion-overlay{position:absolute;inset:0;z-index:5;display:grid;place-items:center;background:#07111ddd;backdrop-filter:blur(8px)}.completion-overlay[hidden]{display:none}.completion-card{max-width:440px;margin:20px;padding:30px;border:1px solid #3a655e;border-radius:16px;background:linear-gradient(145deg,#162b36,#111d2c);text-align:center;box-shadow:0 25px 90px #0009}.completion-card h2{font-size:28px;margin:9px 0}.completion-card p{color:#a9bac9;font-size:13px;margin:0 0 22px}
+  </style>
+</head>
+<body>
+  <div class="desktop-shell">
+    <nav class="sidebar" aria-label="Main navigation">
+      <div class="brand"><div class="mark">◈</div><div><strong>The-ReaL-Exit</strong><small>BUILD · PLAY · DISCOVER</small></div></div>
+      <div class="nav-label">Workspace</div>
+      <div class="nav-list">
+        <button class="nav-btn active" data-page="home"><span class="nav-icon">⌂</span><span class="nav-text">Home</span></button>
+        <button class="nav-btn" data-page="play"><span class="nav-icon">▶</span><span class="nav-text">Play</span></button>
+        <button class="nav-btn" data-page="build"><span class="nav-icon">⌘</span><span class="nav-text">World Editor</span></button>
+        <button class="nav-btn" data-page="worlds"><span class="nav-icon">▦</span><span class="nav-text">My Worlds</span></button>
+        <button class="nav-btn" data-page="ai"><span class="nav-icon">✳</span><span class="nav-text">AI Lab</span></button>
+      </div>
+      <div class="sidebar-bottom">
+        <div class="nav-label" style="padding-top:20px">Preferences</div>
+        <button class="nav-btn" data-page="settings"><span class="nav-icon">⚙</span><span class="nav-text">Settings</span></button>
+        <div class="profile"><div class="avatar">WF</div><div><strong>World Builder</strong><small>Local workspace</small></div></div>
+      </div>
+    </nav>
+    <div class="app-main" id="appMain">
+      <header class="topbar">
+        <div class="crumb">The-ReaL-Exit <span style="color:#52657b"> / </span> <b id="breadcrumb">Home</b></div>
+        <div class="top-actions"><span class="top-status"><i></i>LOCAL WORLD</span><button class="top-icon" id="topResetBtn" title="Reset current run">↻</button></div>
+      </header>
+      <main class="content">
+        <section class="app-page active" id="home-page">
+          <div class="home-hero">
+            <div class="hero-copy">
+              <div class="eyebrow">YOUR WORLD STARTS HERE</div>
+              <h1>Press the plate.<br>Make your way out.</h1>
+              <p>Cross four compact rooms. Press each plate, dodge the rotating bars, and pass through the door before it seals behind you.</p>
+              <div class="button-row"><button class="tool primary" id="homePlayBtn">▶ &nbsp; Continue adventure</button><button class="tool secondary" id="homeBuildBtn">Open world editor</button></div>
+            </div>
+            <div class="hero-art" aria-hidden="true"></div>
+          </div>
+          <div class="home-stats">
+            <div class="home-stat"><div class="label">CAMPAIGN</div><strong>04</strong><small>Linked puzzle rooms</small></div>
+            <div class="home-stat"><div class="label">LEVELS</div><strong id="homeSparks">1 / 4</strong><small>Current campaign position</small></div>
+            <div class="home-stat"><div class="label">PUZZLE</div><strong>PLATE → DOOR</strong><small>Then cross to the next room</small></div>
+            <div class="home-stat"><div class="label">EDITOR</div><strong>+</strong><small>Build and add your own levels</small></div>
+          </div>
+          <div class="home-grid">
+            <div>
+              <div class="section-title"><h2>Pick up where you left off</h2><button class="text-link" data-go="worlds">View all worlds &nbsp;→</button></div>
+              <article class="surface-card recent-card">
+                <div class="world-thumb"></div>
+                <div class="recent-info"><h3>The Pressure Run</h3><p>Four linked rooms · pressure plates and rotating bars</p><div class="recent-actions"><button class="tool primary" id="recentPlayBtn">Start campaign</button><span class="mini-meta">13 × 13 GRID</span></div></div>
+              </article>
+            </div>
+            <div>
+              <div class="section-title"><h2>Quick access</h2><span class="mini-meta">YOUR WORKSPACE</span></div>
+              <div class="quick-stack">
+                <button class="surface-card quick-card" data-go="build"><span class="quick-icon">⌘</span><span><h3>Shape a new path</h3><p>Open the editor and change your world</p></span><span class="quick-arrow">→</span></button>
+                <button class="surface-card quick-card" data-go="build"><span class="quick-icon" style="background:#2a2534;color:#c7a9f5">＋</span><span><h3>Add another level</h3><p>Build a standalone challenge or extend the campaign</p></span><span class="quick-arrow">→</span></button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="app-page" id="world-page">
+          <div class="page-heading">
+            <div><div class="eyebrow" id="worldEyebrow">CAMPAIGN · LEVEL 1 OF 4</div><h1 id="worldTitle">Level 1</h1><p id="worldDescription">Press the plate, dodge the rotating bar, and cross the open door.</p></div>
+            <div class="world-controls">
+              <div class="segmented" aria-label="World mode"><button class="seg-btn active" id="playBtn">▶ Play</button><button class="seg-btn" id="editBtn">⌘ Build</button></div>
+              <div class="segmented" aria-label="Camera view"><button class="seg-btn view-btn active" data-camera="iso">Isometric</button><button class="seg-btn view-btn" data-camera="top">Top-down</button><button class="seg-btn view-btn" data-camera="follow">3rd Person</button><button class="seg-btn view-btn" data-camera="first">1st Person</button></div>
+              <button class="tool" id="saveBtn">Save world</button>
+            </div>
+          </div>
+          <div class="layout">
+            <main class="main">
+              <div class="game-card"><div class="game-top"><span class="pill active" id="modePill">PLAY MODE</span><button class="tool secondary" id="fullscreenBtn">Enter fullscreen</button><span class="pill">PRESSURE RUN · 3D</span></div><div class="canvas-wrap"><div id="world3d" aria-label="Three-dimensional The-ReaL-Exit game world"></div></div><div class="toast" id="toast"></div><div class="completion-overlay" id="completionOverlay" hidden><div class="completion-card"><div class="eyebrow">PUZZLE COMPLETE</div><h2 id="completionTitle">All levels complete!</h2><p id="completionMessage">You cleared every room.</p><button class="tool primary" id="completionAction">Play campaign again</button></div></div><div class="game-bottom"><div class="objective"><small>YOUR OBJECTIVE</small>Press every plate, then cross the open door</div><div class="controls-hint"><span class="keycap">W</span><span class="keycap">A</span><span class="keycap">S</span><span class="keycap">D</span> move &nbsp; <span class="keycap">SPACE</span> jump &nbsp; <span class="keycap">R</span> restart</div></div></div>
+              <div class="toolbar"><div class="tool-group"><span class="mode-caption" id="modeCaption">PLAY · Move with WASD</span></div><div class="tool-group"><span class="stat">LEVEL <b id="coinCount">1 / 4</b></span><span class="stat">COINS <b id="coinProgress">0 / 0</b></span><span class="stat">TIME LEFT <b id="timer">00:08</b></span><span class="stat">DEATHS <b id="deathCount">0</b></span><span class="stat">MOVES <b id="moves">0</b></span><button class="tool secondary" id="restartBtn">↺ Restart level</button></div></div>
+            </main>
+            <aside>
+              <div class="panel-head"><h2>Level panel</h2><span id="panelLevelCount">04 LEVELS</span></div>
+              <div class="section" id="campaignEditorSection" style="display:none"><div class="label">LEVELS <span id="levelCount" style="float:right">4 LEVELS</span></div><div id="levelList" class="level-list"></div><button class="tool" id="addLevelBtn" style="width:100%;margin-top:9px">＋ Add level</button><label class="progress-note standalone-toggle"><input id="standaloneLevel" type="checkbox"> Play this as a standalone level</label><label class="progress-note" style="display:block;margin-top:12px">Rotator speed <input id="rotatorSpeed" type="range" min="0.4" max="2.8" step="0.1" value="1" style="width:100%"></label></div>
+              <div class="section" id="buildToolsSection"><div class="label">LEVEL TOOLS</div><div class="tool-grid"><button class="tile-tool selected" data-tool="select"><em>⌖</em>Select</button><button class="tile-tool" data-tool="wall"><em>▰</em>Wall</button><button class="tile-tool" data-tool="plate"><em>▣</em>Pressure plate</button><button class="tile-tool" data-tool="door"><em>▤</em>Exit door</button><button class="tile-tool" data-tool="rotator"><em>↻</em>Rotator</button><button class="tile-tool" data-tool="start"><em>▶</em>Start</button><button class="tile-tool" data-tool="erase"><em>⌫</em>Erase</button></div><div class="progress-note" id="editHint">Choose a level tool, then click a tile in the 3D room.</div><div class="progress-note" id="selectionInfo">Selected tile: none</div></div>
+              <div class="section" id="objectInspector"><div class="label">SELECTED PIECE</div><div class="progress-note" id="inspectorType">No object selected</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px"><label class="progress-note">Tile X <input id="objectX" type="number" min="1" max="13" step="1" value="1" style="width:100%"></label><label class="progress-note">Tile Z <input id="objectZ" type="number" min="1" max="13" step="1" value="1" style="width:100%"></label></div><input id="objectHeight" type="range" hidden><input id="objectSize" type="range" hidden><input id="objectColor" type="color" hidden><input id="objectCollision" type="checkbox" hidden><button class="tool" id="applyObjectProperties" style="margin-top:10px;width:100%" disabled>Move selected piece</button></div>
+              <div class="section" id="objectivesSection"><div class="label">LEVEL OBJECTIVE</div><div class="objective-row"><i class="check" id="checkPlate">·</i><span>Press every pressure plate</span></div><div class="objective-row"><i class="check" id="checkDoor">·</i><span>Open the exit door</span></div><div class="objective-row"><i class="check" id="checkExit">·</i><span>Cross into the next room</span></div><div class="progress"><i id="progressBar"></i></div><div class="progress-note" id="progressText">Pressure plates: 0 of 1</div></div>
+              <div class="section"><div class="label">LEVEL DETAILS</div><div class="world-row">Active room <span id="activeLevelName">Level 1</span></div><div class="world-row">Grid size <span>13 × 13</span></div><div class="world-row">Placed pieces <span id="objectCount">0</span></div><div class="world-row">Rotating bars <span id="rotatorCount">1</span></div><div class="world-row">View <span id="viewName">ISOMETRIC</span></div></div>
+              <div class="section"><div class="label">CONTROLS</div><div class="progress-note"><span class="keycap">W</span><span class="keycap">A</span><span class="keycap">S</span><span class="keycap">D</span> move · <span class="keycap">SPACE</span> jump</div><div class="progress-note" id="controlHelp" style="margin-top:9px">Drag to orbit · scroll to zoom · R restart.</div></div>
+              <div class="side-foot">WORLD FORGE &nbsp;·&nbsp; YOUR WORLD, YOUR RULES<br>World saves stay on this computer.</div>
+            </aside>
+          </div>
+        </section>
+
+        <section class="app-page" id="worlds-page">
+          <div class="page-heading"><div><div class="eyebrow">YOUR CREATIONS</div><h1>My Worlds</h1><p>Your saved worlds live here on this computer.</p></div><button class="tool primary" data-go="build">⌘ &nbsp; Open editor</button></div>
+          <div class="library-grid"><article class="surface-card library-card"><div class="library-art"></div><div class="library-copy"><h3>The Pressure Run</h3><p>Four rooms connected by pressure plate doors.</p><div class="library-meta"><span>CAMPAIGN</span><span>13 × 13</span></div><div class="button-row" style="margin-top:14px"><button class="tool primary" id="libraryPlayBtn">Play</button><button class="tool" id="libraryBuildBtn">Edit levels</button></div></div></article>
+          <article class="surface-card placeholder"><div><div class="quick-icon">＋</div><h2>Add a standalone challenge</h2><p>Create a level in the editor, mark it as standalone, and export its JSON for sharing.</p><button class="tool secondary" style="margin-top:16px" data-go="build">Open editor</button></div></article></div>
+        </section>
+
+        <section class="app-page" id="ai-page">
+          <div class="page-heading"><div><div class="eyebrow">LEARNING LAB</div><h1>AI Lab</h1><p>A place for agents to learn how to navigate worlds you create.</p></div></div>
+          <div class="rl-layout">
+            <article class="surface-card rl-card">
+              <div class="label">TRAINING SETUP</div>
+              <div class="rl-form-grid">
+                <label class="rl-field">Algorithm<select id="rlAlgorithm"></select></label>
+                <label class="rl-field">Training levels<select id="rlLevels"><option value="campaign">Full campaign</option></select></label>
+                <label class="rl-field">Training timesteps<input id="rlTimesteps" type="number" min="1000" step="1000" value="50000"></label>
+                <label class="rl-field">Headless batch speed<select id="rlSpeed"><option value="128">1× · 128 steps/update</option><option value="512">4× · 512 steps/update</option><option value="2048" selected>16× · 2,048 steps/update</option><option value="4096">32× · 4,096 steps/update</option></select></label>
+                <label class="rl-field">Episode step limit<input id="rlEpisodeLimit" type="number" min="40" max="2000" step="20" value="240"></label>
+                <label class="rl-field">Random seed<input id="rlSeed" type="number" value="17"></label>
+              </div>
+              <p class="rl-description" id="rlAlgorithmDescription"></p>
+              <div class="label rl-subhead">AGENT PERCEPTION</div>
+              <p class="rl-description">A heading-relative 7 × 7 local view of walls, blocks, hazards, moving obstacles, collectibles, plates, switches, and doors, plus visible door direction, plate/coin progress, level, timer, deaths, and completion. Absolute coordinates and hidden target locations are not supplied.</p>
+              <div class="label rl-subhead">ALGORITHM HYPERPARAMETERS</div>
+              <div class="rl-form-grid" id="rlHyperparameters"></div>
+              <div class="label rl-subhead">REWARD CONFIGURATION</div>
+              <p class="rl-description">Rewards use the player’s visible local scene, level timer, progress, and deaths. Finishing with more time left earns a larger speed bonus. Values are saved in the checkpoint.</p>
+              <div class="rl-form-grid" id="rlRewards"></div>
+              <div class="label rl-subhead">AGENT ACTIONS</div>
+              <div class="rl-actions"><span>W / S move</span><span>A / D strafe</span><span>← / → turn</span><span>Space jump</span><span>E interact</span><span>Wait</span></div>
+              <div class="rl-controls">
+                <button class="tool primary" id="rlStart">Start training</button>
+                <button class="tool" id="rlPause" disabled>Pause</button>
+                <button class="tool" id="rlStop" disabled>Stop</button>
+                <button class="tool" id="rlReset">Reset</button>
+                <button class="tool" id="rlSave" disabled>Save checkpoint</button>
+                <button class="tool" id="rlLoad">Load checkpoint</button>
+                <button class="tool" id="rlEvaluate" disabled>Evaluate · 20 episodes</button>
+                <input id="rlCheckpointFile" type="file" accept="application/json,.json" hidden>
+              </div>
+              <div class="rl-status"><span class="rl-status-dot" id="rlStatusDot"></span><span id="rlStatus">Ready · PPO is the recommended default</span><span id="rlProgressPercent">0%</span></div>
+              <div class="rl-progress"><i id="rlProgressBar"></i></div>
+            </article>
+            <div class="rl-side">
+              <article class="surface-card rl-card">
+                <div class="label">TRAINING PROGRESS</div>
+                <div class="rl-metrics">
+                  <div><small>EPISODES</small><b id="rlEpisodes">0</b></div>
+                  <div><small>TIMESTEPS</small><b id="rlSteps">0</b></div>
+                  <div><small>MEAN REWARD</small><b id="rlMeanReward">—</b></div>
+                  <div><small>SUCCESS · LAST 50</small><b id="rlSuccessRate">—</b></div>
+                  <div><small>MEAN EPISODE LENGTH</small><b id="rlMeanLength">—</b></div>
+                  <div><small>MEAN COLLISIONS</small><b id="rlMeanCollisions">—</b></div>
+                  <div><small>DEATHS · LAST 50</small><b id="rlMeanDeaths">—</b></div>
+                  <div><small>MEAN COINS</small><b id="rlMeanCoins">—</b></div>
+                </div>
+                <div class="rl-chart-wrap"><canvas id="rlRewardChart" height="180" aria-label="Episode reward chart"></canvas></div>
+                <div class="rl-chart-legend"><span>● Episode reward</span><span id="rlBatchInfo">Headless simulation</span></div>
+                <div class="rl-checkpoint-watch"><button class="tool primary" id="rlWatchInGame" disabled>Watch checkpoint in game</button><p class="rl-description">Play the trained policy in the full 3D level view after training or loading a checkpoint.</p></div>
+              </article>
+              <article class="surface-card rl-card">
+                <div class="label">EVALUATION</div>
+                <h3 class="rl-evaluation-title" id="rlEvaluationTitle">No evaluation yet</h3>
+                <p class="rl-description" id="rlEvaluation">Train or load a checkpoint, then run a 20-episode evaluation with exploration disabled.</p>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section class="app-page" id="settings-page">
+          <div class="page-heading"><div><div class="eyebrow">PREFERENCES</div><h1>Settings</h1><p>Adjust your local The-ReaL-Exit experience.</p></div></div>
+          <div class="settings-grid"><div class="surface-card settings-nav"><button class="active" data-settings-tab="general">General</button><button data-settings-tab="controls">Controls</button><button data-settings-tab="appearance">Appearance</button><button data-settings-tab="data">Data & saves</button></div><div class="surface-card settings-panel">
+            <div class="settings-content" data-settings-content="general"><div class="label">GENERAL</div>
+              <div class="setting-row"><div><strong>Default player view</strong><small>Choose the camera view when opening an adventure.</small></div><select class="setting-select" id="defaultViewSelect"><option value="iso">Isometric</option><option value="top">Top-down</option><option value="follow">Follow player</option><option value="first">First person</option></select></div>
+              <div class="setting-row"><div><strong>AI Lab</strong><small>Headless PPO and DQN training runs locally in this app.</small></div><span class="mini-meta">LOCAL CPU</span></div>
+            </div>
+            <div class="settings-content" data-settings-content="controls" hidden><div class="label">CONTROLS</div><div class="setting-row"><div><strong>Move</strong><small>Walk around the world</small></div><span><span class="keycap">W</span><span class="keycap">A</span><span class="keycap">S</span><span class="keycap">D</span> <span class="mini-meta">or arrows</span></span></div><div class="setting-row"><div><strong>Restart run</strong><small>Reset the player and objective progress</small></div><span class="keycap">R</span></div><div class="setting-row"><div><strong>Edit world</strong><small>Pick a build tool, then click a tile</small></div><span class="mini-meta">MOUSE</span></div></div>
+            <div class="settings-content" data-settings-content="appearance" hidden><div class="label">APPEARANCE</div><div class="setting-row"><div><strong>Player camera</strong><small>Change the view in the world screen at any time.</small></div><div class="segmented"><button class="seg-btn view-btn" data-camera="iso">Isometric</button><button class="seg-btn view-btn" data-camera="top">Top-down</button><button class="seg-btn view-btn" data-camera="follow">3rd Person</button><button class="seg-btn view-btn" data-camera="first">1st Person</button></div></div><div class="setting-row"><div><strong>Interface theme</strong><small>Ember Glow is the current theme.</small></div><span class="mini-meta">EMBER GLOW</span></div></div>
+            <div class="settings-content" data-settings-content="data" hidden><div class="label">DATA & SAVES</div><div class="setting-row"><div><strong>Local world save</strong><small>World data is stored in this app on this computer.</small></div><span class="mini-meta">LOCAL</span></div><div class="setting-row"><div><strong>Export current world</strong><small>Download a JSON copy of this world.</small></div><button class="tool" id="exportWorldBtn">Export JSON</button></div><div class="setting-row"><div><strong>Restore starter world</strong><small>Replace the current world with its original layout.</small></div><button class="tool" id="restoreWorldBtn">Restore</button></div></div>
+          </div></div>
+        </section>
+      </main>
+    </div>
+  </div>
+<script type="module" src="./desktop/world.js"></script>
+</body>
+</html>
+
+
+
+
+
+
+
+
