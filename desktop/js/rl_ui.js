@@ -39,34 +39,21 @@ export class RLUIController {
       this.algorithms = [
         {
           id: 'ppo',
-          name: 'PPO · Clipped Policy',
-          description: 'Stable on-policy learning for the mixed movement and interaction action set.',
-          defaults: { learningRate: 0.08, discount: 0.99, gaeLambda: 0.95, rolloutSteps: 256, epochs: 3, clipRange: 0.2, entropy: 0.015 },
+          name: 'PPO · Actor-Critic Network',
+          description: 'Neural-network PPO with GAE on the egocentric view.',
+          defaults: { learningRate: 0.001, discount: 0.99, gaeLambda: 0.95, rolloutSteps: 16, epochs: 4, miniBatchSize: 64, clipRange: 0.2, entropy: 0.02, hidden: 128, parallelInstances: 16, annealLR: 1 },
           fields: [
-            { key: 'learningRate', label: 'Policy learning rate', min: 0.005, max: 0.3, step: 0.005 },
+            { key: 'learningRate', label: 'Learning rate', min: 0.00005, max: 0.003, step: 0.00005 },
             { key: 'discount', label: 'Discount γ', min: 0.8, max: 0.999, step: 0.001 },
             { key: 'gaeLambda', label: 'GAE λ', min: 0.5, max: 1, step: 0.01 },
-            { key: 'rolloutSteps', label: 'Rollout steps', min: 32, max: 1024, step: 32, integer: true },
-            { key: 'epochs', label: 'Update epochs', min: 1, max: 8, step: 1, integer: true },
+            { key: 'rolloutSteps', label: 'Rollout steps per env', min: 8, max: 512, step: 8, integer: true },
+            { key: 'epochs', label: 'Update epochs', min: 1, max: 10, step: 1, integer: true },
+            { key: 'miniBatchSize', label: 'Minibatch size', min: 64, max: 4096, step: 64, integer: true },
             { key: 'clipRange', label: 'PPO clip range', min: 0.05, max: 0.4, step: 0.01 },
             { key: 'entropy', label: 'Entropy bonus', min: 0, max: 0.1, step: 0.001 },
-          ],
-        },
-        {
-          id: 'dqn',
-          name: 'DQN · Replay Q-Network',
-          description: 'Off-policy value learning with a small neural Q-network and replay memory.',
-          defaults: { learningRate: 0.001, discount: 0.99, epsilonStart: 1, epsilonEnd: 0.05, epsilonDecaySteps: 12000, batchSize: 32, replaySize: 5000, trainEvery: 4, targetSyncSteps: 250 },
-          fields: [
-            { key: 'learningRate', label: 'Learning rate', min: 0.0001, max: 0.01, step: 0.0001 },
-            { key: 'discount', label: 'Discount γ', min: 0.8, max: 0.999, step: 0.001 },
-            { key: 'epsilonStart', label: 'Initial exploration ε', min: 0.1, max: 1, step: 0.01 },
-            { key: 'epsilonEnd', label: 'Final exploration ε', min: 0.01, max: 0.4, step: 0.01 },
-            { key: 'epsilonDecaySteps', label: 'Exploration decay steps', min: 500, max: 100000, step: 500, integer: true },
-            { key: 'batchSize', label: 'Replay batch size', min: 8, max: 128, step: 8, integer: true },
-            { key: 'replaySize', label: 'Replay capacity', min: 500, max: 20000, step: 500, integer: true },
-            { key: 'trainEvery', label: 'Train every N steps', min: 1, max: 16, step: 1, integer: true },
-            { key: 'targetSyncSteps', label: 'Target sync interval', min: 50, max: 2000, step: 50, integer: true },
+            { key: 'hidden', label: 'Hidden units', min: 32, max: 512, step: 32, integer: true },
+            { key: 'parallelInstances', label: 'Parallel environments', min: 1, max: 64, step: 1, integer: true },
+            { key: 'annealLR', label: 'Anneal learning rate (1 = on)', min: 0, max: 1, step: 1, integer: true },
           ],
         },
         {
@@ -78,13 +65,13 @@ export class RLUIController {
         },
       ];
       this.defaultRewards = {
-        timeStep: -0.01, progress: 0.1, coin: 5, plate: 10, doorOpen: 2, goal: 100,
-        collision: -0.5, hazard: -10, rotatorCollision: -1, moverCollision: -0.7,
-        platformCollision: -0.3, invalidInteract: -0.1, pushBlock: -0.1, jumpHazard: 0.25, switch: 1,
-        deathPenalty: -5, speedBonus: 5,
+        timeStep: -0.03, progress: 0.12, coin: 1, plate: 3, doorOpen: 2, goal: 10,
+        collision: -0.25, hazard: -2, rotatorCollision: -0.75, moverCollision: -0.5,
+        platformCollision: -0.3, invalidInteract: -0.05, pushBlock: 0.05, jumpHazard: 0.5, switch: 0.3,
+        deathPenalty: -3, speedBonus: 3,
       };
       this.rewardLabels = {
-        timeStep: 'Per action / time step', progress: 'Visible objective closer / farther', coin: 'Collect coin',
+        timeStep: 'Per action / time step', progress: 'Shortest-path progress to objective (per cell)', coin: 'Collect coin',
         plate: 'Press pressure plate', doorOpen: 'Open door', goal: 'Reach goal',
         collision: 'Wall collision', hazard: 'Hit hazard', rotatorCollision: 'Rotating obstacle hit',
         moverCollision: 'Moving obstacle hit', platformCollision: 'Raised platform hit',
@@ -283,7 +270,7 @@ export class RLUIController {
     $('rlMeanDeaths').textContent = stats.episodes ? stats.meanDeaths.toFixed(1) : '—';
     $('rlMeanCoins').textContent = stats.episodes ? stats.coinRate.toFixed(1) : '—';
 
-    const target = Math.max(1, Number($('rlTimesteps').value) || 50000);
+    const target = Math.max(1, Number($('rlTimesteps').value) || 200000);
     const percent = Math.min(100, (stats.steps / target) * 100);
     $('rlProgressBar').style.width = `${percent}%`;
     $('rlProgressPercent').textContent = `${Math.floor(percent)}%`;
@@ -341,7 +328,7 @@ export class RLUIController {
         hyperparameters: checkpoint?.hyperparameters || this.currentHyperparameters(),
         levels: checkpoint?.levels || this.selectedLevels(),
         seed: checkpoint?.seed || Number($('rlSeed').value) || 17,
-        maxEpisodeSteps: checkpoint?.maxEpisodeSteps || Number($('rlEpisodeLimit').value) || 240,
+        maxEpisodeSteps: checkpoint?.maxEpisodeSteps || Number($('rlEpisodeLimit').value) || 300,
         rewards: this.currentRewards(),
         checkpoint,
       };
@@ -350,7 +337,7 @@ export class RLUIController {
       this.loadedCheckpoint = null;
       this.rlRunId++;
       await this.client.startTraining(
-        Math.max(1000, Number($('rlTimesteps').value) || 50000),
+        Math.max(1000, Number($('rlTimesteps').value) || 200000),
         Number($('rlSpeed').value) || 2048
       );
       this.setState('running', `Training · ${algoId.toUpperCase()} on Python Backend`);
@@ -402,14 +389,15 @@ export class RLUIController {
     $('rlEvaluate').disabled = true;
     $('rlEvaluationTitle').textContent = 'Evaluating…';
     $('rlEvaluationTitle').className = 'rl-evaluation-title';
-    $('rlEvaluation').textContent = 'Running 20 headless episodes without exploration on Python backend.';
+    $('rlEvaluation').textContent = 'Running 20 full-campaign runs plus per-level tests without exploration on the Python backend.';
 
     try {
       const res = await this.client.evaluate(20);
       const m = res.metrics;
       $('rlEvaluationTitle').textContent = `${Math.round(m.successRate * 100)}% success · ${m.meanReward.toFixed(1)} mean reward`;
       $('rlEvaluationTitle').className = `rl-evaluation-title ${m.successRate > 0.5 ? 'success' : 'failure'}`;
-      $('rlEvaluation').textContent = `Average ${m.meanSteps.toFixed(0)} steps · ${m.meanDeaths.toFixed(1)} deaths · ${m.meanCollisions.toFixed(1)} collisions · ${m.meanCoins.toFixed(1)} coins per episode.`;
+      const perLevel = (m.perLevelClearRate || []).map((rate, i) => `L${i + 1} ${Math.round(rate * 100)}%`).join(' · ');
+      $('rlEvaluation').textContent = `Full campaign: ${m.meanLevels?.toFixed(1) ?? '?'} levels cleared on average · ${m.meanSteps.toFixed(0)} steps · ${m.meanDeaths.toFixed(1)} deaths · ${m.meanCollisions.toFixed(1)} collisions.${perLevel ? ` Per-level clear rate: ${perLevel}.` : ''}`;
     } catch (err) {
       $('rlEvaluationTitle').textContent = 'Evaluation failed';
       $('rlEvaluation').textContent = err.message;

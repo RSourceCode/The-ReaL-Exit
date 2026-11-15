@@ -264,7 +264,7 @@ export async function bootstrap() {
 
       physicsManager.step(
         dt,
-        t,
+        rlPlayback.isActive ? rlPlayback.simTime : t,
         gameManager.world,
         gameManager.doorsOpen,
         boardMeshes.exitDoorGroup,
@@ -279,7 +279,8 @@ export async function bootstrap() {
         boardMeshes.plateMeshes,
         boardMeshes.exitDoorMesh,
         (m) => ui.toast(m),
-        rlPlayback.isActive
+        rlPlayback.isActive,
+        boardMeshes.coinMeshes
       );
 
       // Visual coin bobbing

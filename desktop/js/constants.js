@@ -29,8 +29,30 @@ export function boundaryWalls(exitDoor) {
 /**
  * Construct starter campaign level definition.
  */
+const lavaLine = (z) => Array.from({ length: GRID_SIZE - 2 }, (_, i) => [i + 1, z]);
+
+// Bonus rooms 5-8 (lava to jump over, coins to grab). Mirrors backend/levels.py.
+const BONUS_LEVELS = [
+  { name: 'Lava Line', walls: [[3, 5], [9, 5]], hazards: lavaLine(7), plates: [[6, 4]], coins: [[6, 5], [3, 9], [9, 9]], rotators: [[6, 10]], rotatorSpeed: 1.3 },
+  { name: 'Twin Plates', walls: [[3, 6], [9, 6]], hazards: [], plates: [[4, 4], [8, 4]], coins: [[2, 4], [10, 4], [6, 6]], rotators: [[6, 8]], rotatorSpeed: 1.2 },
+  { name: 'Moat Run', walls: [[2, 5], [10, 5]], hazards: lavaLine(6), plates: [[6, 4]], coins: [[3, 7], [9, 7], [6, 8]], rotators: [[3, 9], [9, 9]], rotatorSpeed: 1.6 },
+  { name: 'Final Gauntlet', walls: [[3, 5], [9, 5]], hazards: lavaLine(6), plates: [[6, 4]], coins: [[2, 8], [10, 8], [6, 11]], rotators: [[6, 9], [4, 10], [8, 10]], rotatorSpeed: 1.9 },
+];
+
 export function makeLevel(index = 0) {
   const exitDoor = [6, GRID_SIZE - 1];
+  if (index >= 4 && index < 4 + BONUS_LEVELS.length) {
+    const spec = BONUS_LEVELS[index - 4];
+    const copy = (cells) => cells.map((cell) => [...cell]);
+    return {
+      version: 4, name: spec.name,
+      walls: boundaryWalls(exitDoor).concat(copy(spec.walls)),
+      blocks: [], platforms: [], stairs: [], hazards: copy(spec.hazards), switches: [], painted: [],
+      coins: copy(spec.coins), springs: [], portals: [], checkpoints: [], movers: [],
+      plates: copy(spec.plates), rotators: copy(spec.rotators), rotatorSpeed: spec.rotatorSpeed,
+      exitDoor, objectProperties: {}, start: [6, 2], goal: exitDoor, standalone: false,
+    };
+  }
   const rotatorSets = [
     [[6, 8]],
     [[4, 8], [8, 8]],
@@ -70,10 +92,10 @@ export function makeLevel(index = 0) {
 }
 
 /**
- * Generate starter 4-level campaign.
+ * Generate the starter 8-level campaign.
  */
 export function freshCampaign() {
-  return [0, 1, 2, 3].map(makeLevel);
+  return [0, 1, 2, 3, 4, 5, 6, 7].map(makeLevel);
 }
 
 /**

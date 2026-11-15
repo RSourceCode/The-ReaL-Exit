@@ -1,7 +1,8 @@
 """Uniform random policy baseline agent."""
 
-import math
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional, Tuple
+
+import numpy as np
 
 from backend.config import ACTIONS
 from backend.rl.algorithms.base import BaseAgent
@@ -21,25 +22,25 @@ class RandomAgent(BaseAgent):
     def __init__(self, config: Optional[Dict[str, Any]] = None, checkpoint: Optional[Dict[str, Any]] = None):
         cfg = {**METADATA["defaults"], **(config or {})}
         self.id = METADATA["id"]
-        raw_state = checkpoint.get("state") if checkpoint else cfg.get("seed", 17)
-        self.state = int(raw_state) & 0xFFFFFFFF
+        self.rng = np.random.default_rng(int(cfg.get("seed", 17)))
 
-    def _random(self) -> float:
-        self.state = (1664525 * self.state + 1013904223) & 0xFFFFFFFF
-        return self.state / 0x100000000
+    def act_batch(self, observations: np.ndarray, explore: bool = True, masks=None) -> Tuple[np.ndarray, Dict[str, Any]]:
+        n = len(observations)
+        if masks is None:
+            return self.rng.integers(0, len(ACTIONS), size=n), {"prob": np.full(n, 1.0 / len(ACTIONS))}
+        weights = np.asarray(masks, dtype=np.float64)
+        weights /= weights.sum(axis=1, keepdims=True)
+        actions = (weights.cumsum(axis=1) < self.rng.random(n)[:, None]).sum(axis=1)
+        return np.minimum(actions, len(ACTIONS) - 1), {"prob": weights[np.arange(n), np.minimum(actions, len(ACTIONS) - 1)]}
 
-    def act(self, observation: List[float], state_key: str, explore: bool = True) -> Dict[str, Any]:
-        action = math.floor(self._random() * len(ACTIONS))
-        return {"action": action, "probability": 1.0 / len(ACTIONS)}
-
-    def observe(self, transition: Dict[str, Any]) -> None:
+    def observe_batch(self, obs, actions, extras, rewards, next_obs, terminated, truncated) -> None:
         pass
 
-    def end_episode(self) -> None:
-        pass
+    def maybe_learn(self, current_obs):
+        return None
 
     def serialize(self) -> Dict[str, Any]:
-        return {"state": self.state}
+        return {}
 
     @property
     def action_count(self) -> int:
@@ -49,4 +50,3 @@ class RandomAgent(BaseAgent):
 def create_agent(config: Optional[Dict[str, Any]] = None, checkpoint: Optional[Dict[str, Any]] = None) -> RandomAgent:
     """Factory creating a RandomAgent."""
     return RandomAgent(config, checkpoint)
-

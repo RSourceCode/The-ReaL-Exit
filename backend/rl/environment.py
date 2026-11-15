@@ -1,26 +1,42 @@
 """Headless grid simulation environment for The-ReaL-Exit reinforcement learning.
 
-Simulates movement, physics-grid collisions, hazards, rotators, movers,
-pressure plates, doors, and coins using the same level specifications as the
-3D runtime and editor.
+Simulates movement, grid collisions, hazards, rotators, movers, pressure plates, doors
+and coins using the same level specifications as the 3D runtime and the editor.
+
+What makes this environment *learnable* (compared with a raw 7x7 view):
+
+* ``observe()`` returns an egocentric 9x9 window with **time-resolved rotator danger**
+  layers (which cells will be swept by a bar during each of the next 4 actions).
+* A cached **shortest-path distance field** to the current objective (plate, then exit)
+  provides a compass (is each neighbour closer?) and a potential-based shaping reward.
+* Training can start every episode on a **random level** with a **random rotator phase**.
 """
 
+import heapq
 import math
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+import numpy as np
+
 from backend.config import (
     ACTIONS,
+    DANGER_HORIZON,
     DEFAULT_REWARDS,
     LEVEL_TIME_LIMIT_STEPS,
     LOCAL_VIEW_CHANNELS,
     LOCAL_VIEW_RADIUS,
+    LOCAL_VIEW_SIZE,
+    LOCAL_VIEW_WIDTH,
     MAX_TRACKED,
     OBSERVATION_SIZE,
-    RL_ACTION_DURATION_SECONDS,
     PLAYER_JUMP_DURATION_SECONDS,
     PLAYER_JUMP_IMPULSE,
+    RL_ACTION_DURATION_SECONDS,
+    STATIC_CHANNELS,
     WORLD_GRAVITY,
 )
+
+Cell = Tuple[int, int]
 
 
 def key_of(cell) -> str:
@@ -38,6 +54,34 @@ _DIRS = [(0, 1), (1, 0), (0, -1), (-1, 0)]
 ROTATOR_HALF_LENGTH = 1.04
 ROTATOR_HALF_THICKNESS = 0.16
 PLAYER_CENTER_Y = 0.42
+PLAYER_HALF = 0.37
+_LIMIT_X = ROTATOR_HALF_LENGTH + PLAYER_HALF
+_LIMIT_Z = ROTATOR_HALF_THICKNESS + PLAYER_HALF
+JUMP_COST = 4.0
+INF = 1.0e9
+PAD = LOCAL_VIEW_RADIUS
+
+# Static channel indices
+CH_WALL, CH_BLOCK, CH_HAZARD, CH_MOVER, CH_PLATFORM, CH_COIN, CH_PLATE, CH_DOOR_CLOSED, CH_DOOR_OPEN, CH_SWITCH = range(10)
+assert STATIC_CHANNELS == 10
+
+
+def _build_offsets():
+    """Per-heading (dx, dz) offsets for the egocentric window (row 0 = furthest ahead)."""
+    width = LOCAL_VIEW_WIDTH
+    dx = np.zeros((4, width, width), dtype=np.int64)
+    dz = np.zeros((4, width, width), dtype=np.int64)
+    for h, (fx, fz) in enumerate(_DIRS):
+        lx, lz = -fz, fx
+        for r, local_forward in enumerate(range(LOCAL_VIEW_RADIUS, -LOCAL_VIEW_RADIUS - 1, -1)):
+            for c, local_left in enumerate(range(-LOCAL_VIEW_RADIUS, LOCAL_VIEW_RADIUS + 1)):
+                dx[h, r, c] = fx * local_forward + lx * local_left
+                dz[h, r, c] = fz * local_forward + lz * local_left
+    return dx, dz
+
+
+_DX, _DZ = _build_offsets()
+_SCALAR_START = LOCAL_VIEW_SIZE
 
 
 class WorldEnvironment:
@@ -53,13 +97,18 @@ class WorldEnvironment:
         self.seed = int(opts.get("seed", 1))
         custom_rewards = opts.get("rewards") or {}
         self.rewards = {k: float(custom_rewards.get(k, DEFAULT_REWARDS[k])) for k in DEFAULT_REWARDS}
-        self.random_state = self.seed & 0xFFFFFFFF
+        self.random_state = (self.seed * 2654435761 + 12345) & 0xFFFFFFFF
+        for _ in range(4):
+            self.random()
+        # Training helpers: begin on a random level and with a random rotator phase.
+        self.random_start_level = bool(opts.get("randomStartLevel", False))
+        self.random_phase = bool(opts.get("randomPhase", True))
 
         # Tracking variables
         self.level_index = 0
         self.episode_complete = False
         self.episode_steps = 0
-        self.simulation_steps = 0
+        self.simulation_steps = 0.0
         self.collision_count = 0
         self.death_count = 0
         self.total_coins = 0
@@ -68,106 +117,121 @@ class WorldEnvironment:
 
         # Level state
         self.level: Dict[str, Any] = {}
-        self.level_steps = 0
+        self.level_steps = 0.0
         self.size = 13
         self.position = [0, 0]
         self.heading = 0
-        self.walls: Set[str] = set()
-        self.blocks: Set[str] = set()
-        self.hazards: Set[str] = set()
+        self.walls: Set[Cell] = set()
+        self.blocks: Set[Cell] = set()
+        self.hazards: Set[Cell] = set()
         self.rotator_cells: List[List[int]] = []
-        self.rotators: Set[str] = set()
-        self.rotator_footprint: Set[str] = set()
-        self.movers: Set[str] = set()
+        self.rotators: Set[Cell] = set()
+        self.movers: Set[Cell] = set()
         self.plates: List[List[int]] = []
         self.plate_mask = 0
         self.coins: List[List[int]] = []
         self.coin_mask = 0
         self.switches: List[List[int]] = []
-        self._switch_keys: Set[str] = set()  # O(1) lookup cache
+        self._switch_keys: Set[Cell] = set()
         self.switch_on = False
         self.exit_door: List[int] = [0, 0]
-        self._exit_door_key: str = ""
+        self._exit_door_key: Cell = (0, 0)
         self.doors_open = False
-        self.stairs: Set[str] = set()
-        self.platforms: Set[str] = set()
+        self.stairs: Set[Cell] = set()
+        self.platforms: Set[Cell] = set()
 
-        # O(1) lookup maps for coin/plate indices by cell key
-        self._coin_key_to_idx: Dict[str, int] = {}
-        self._plate_key_to_idx: Dict[str, int] = {}
+        self._coin_key_to_idx: Dict[Cell, int] = {}
+        self._plate_key_to_idx: Dict[Cell, int] = {}
 
-        # Cached observation array — reused each call to avoid per-step allocation
-        self._obs = [0.0] * OBSERVATION_SIZE
+        # Rotator constants (numpy) – rebuilt per level
+        self._rot_x = np.zeros(0)
+        self._rot_z = np.zeros(0)
+        self._rot_dir = np.zeros(0)
+        self._rot_speed = 1.1
+
+        # Static observation tensor and objective distance field
+        self._static = np.zeros((STATIC_CHANNELS, 1, 1), dtype=np.float32)
+        self._dist: List[float] = []
+        self._dist_np = np.zeros((1, 1))
+        self._targets: List[Cell] = []
+        self._plates_remaining = 0
+        self._obs = np.zeros(OBSERVATION_SIZE, dtype=np.float32)
 
         self.reset()
 
+    # ── RNG ────────────────────────────────────────────────────────────────────────────
     def random(self) -> float:
-        """Linear congruential generator matching runtime RNG for deterministic simulation."""
+        """Linear congruential generator for deterministic simulation."""
         self.random_state = (1664525 * self.random_state + 1013904223) & 0xFFFFFFFF
         return self.random_state / 0x100000000
 
-    def reset(self) -> List[float]:
-        """Reset the environment to the beginning of the campaign/level set."""
-        self.level_index = 0
+    # ── Reset / level loading ──────────────────────────────────────────────────────────
+    def reset(self, level_index: Optional[int] = None) -> np.ndarray:
+        """Reset the environment (to level 0, a given level, or a random level)."""
+        if level_index is None:
+            level_index = int(self.random() * len(self.levels)) if self.random_start_level else 0
+        level_index = max(0, min(len(self.levels) - 1, int(level_index)))
+        self.level_index = level_index
         self.episode_complete = False
         self.episode_steps = 0
-        self.simulation_steps = 0
+        # The 3D game's rotators run on the wall clock, so the phase at level start is arbitrary.
+        self.simulation_steps = self.random() * 40.0 if self.random_phase else 0.0
         self.collision_count = 0
         self.death_count = 0
         self.total_coins = 0
         self.total_plates = 0
         self.level_changes = 0
-        self._load_level(self.levels[0])
-        return self.observe()
+        self._load_level(self.levels[level_index])
+        return self.observe().copy()
 
     def _load_level(self, level: Dict[str, Any]) -> None:
         """Load and parse level geometry, hazards, and interactive targets."""
         self.level = level
-        self.level_steps = 0
+        self.level_steps = 0.0
         self.size = int(level.get("size", 13))
         start_cell = level.get("start") or [self.size // 2, 1]
         self.position = [int(start_cell[0]), int(start_cell[1])]
-        self.heading = 0  # 0: +Z forward, 1: +X right, 2: -Z back, 3: -X left
+        self.heading = 0
 
-        self.walls = {key_of(c) for c in level.get("walls", [])}
-        self.blocks = {key_of(c) for c in level.get("blocks", [])}
-        self.hazards = {key_of(c) for c in level.get("hazards", [])}
-        self.rotator_cells = [list(c) for c in level.get("rotators", [])]
-        self.rotators = {key_of(c) for c in self.rotator_cells}
-        self.rotator_footprint = set()
-        self.movers = {key_of(c) for c in level.get("movers", [])}
-        self.plates = [list(c) for c in level.get("plates", [])[:MAX_TRACKED]]
+        self.walls = {(int(c[0]), int(c[1])) for c in level.get("walls", [])}
+        self.blocks = {(int(c[0]), int(c[1])) for c in level.get("blocks", [])}
+        self.hazards = {(int(c[0]), int(c[1])) for c in level.get("hazards", [])}
+        self.rotator_cells = [[int(c[0]), int(c[1])] for c in level.get("rotators", [])]
+        self.rotators = {(c[0], c[1]) for c in self.rotator_cells}
+        self.movers = {(int(c[0]), int(c[1])) for c in level.get("movers", [])}
+        self.plates = [[int(c[0]), int(c[1])] for c in level.get("plates", [])[:MAX_TRACKED]]
         self.plate_mask = 0
-        self.coins = [list(c) for c in level.get("coins", [])[:MAX_TRACKED]]
+        self.coins = [[int(c[0]), int(c[1])] for c in level.get("coins", [])[:MAX_TRACKED]]
         self.coin_mask = 0
-        self.switches = [list(c) for c in level.get("switches", [])]
-        self._switch_keys = {key_of(s) for s in self.switches}
+        self.switches = [[int(c[0]), int(c[1])] for c in level.get("switches", [])]
+        self._switch_keys = {(s[0], s[1]) for s in self.switches}
         self.switch_on = False
 
         door = level.get("exitDoor") or level.get("goal") or [self.size // 2, self.size - 1]
         self.exit_door = [int(door[0]), int(door[1])]
-        self._exit_door_key = key_of(self.exit_door)
+        self._exit_door_key = (self.exit_door[0], self.exit_door[1])
         self.doors_open = len(self.plates) == 0
-        self.stairs = {key_of(c) for c in level.get("stairs", [])}
-        self.platforms = {key_of(c) for c in level.get("platforms", [])}
+        self.stairs = {(int(c[0]), int(c[1])) for c in level.get("stairs", [])}
+        self.platforms = {(int(c[0]), int(c[1])) for c in level.get("platforms", [])}
 
-        # Build O(1) lookup maps for coins and plates
-        self._coin_key_to_idx = {key_of(c): i for i, c in enumerate(self.coins)}
-        self._plate_key_to_idx = {key_of(p): i for i, p in enumerate(self.plates)}
+        self._coin_key_to_idx = {(c[0], c[1]): i for i, c in enumerate(self.coins)}
+        self._plate_key_to_idx = {(p[0], p[1]): i for i, p in enumerate(self.plates)}
+
+        # Rotator constants
+        self._rot_speed = float(level.get("rotatorSpeed", 1.1))
+        if self.rotator_cells:
+            self._rot_x = np.array([c[0] for c in self.rotator_cells], dtype=np.float64)
+            self._rot_z = np.array([c[1] for c in self.rotator_cells], dtype=np.float64)
+            self._rot_dir = np.array([-1.0 if i % 2 else 1.0 for i in range(len(self.rotator_cells))])
+        else:
+            self._rot_x = self._rot_z = self._rot_dir = np.zeros(0)
+
+        self._build_static()
+        self._refresh_objective()
 
     def get_state_key(self) -> str:
-        """Return a compact discretized state key for tabular policies.
-
-        Uses only the most discriminative features (heading, masks, door sensor)
-        rather than the full 726-element vector — much cheaper than calling observe().
-        """
-        timer_bucket = min(5, math.floor(self.level_steps / LEVEL_TIME_LIMIT_STEPS * 6))
-        door_sensor = self._visible_door_sensor(10.0)
-        return (
-            f"{self.heading},{self.plate_mask},{self.coin_mask},{self.level_index},"
-            f"{int(self.doors_open)},{timer_bucket},{min(10, self.death_count)},"
-            f"{int(door_sensor['visible'])},{round(door_sensor['lateral'] * 10)},{round(door_sensor['forward'] * 10)}"
-        )
+        """Compact state key (kept for API compatibility; the neural agents ignore it)."""
+        return f"{self.level_index},{self.position[0]},{self.position[1]},{self.heading},{self.plate_mask},{self.coin_mask}"
 
     def snapshot(self) -> Dict[str, Any]:
         """Capture a snapshot of the current environment state."""
@@ -184,271 +248,267 @@ class WorldEnvironment:
             "deaths": self.death_count,
         }
 
-    def observe(self) -> List[float]:
-        """Construct the heading-relative local grid and scalar status vector."""
-        x, z = self.position
-        obs = self._obs
-        i = 0
+    @property
+    def sim_time_seconds(self) -> float:
+        """Simulated wall-clock time that drives the rotating bars."""
+        return self.simulation_steps * RL_ACTION_DURATION_SECONDS
 
-        # One-hot heading (4)
-        for d in range(4):
-            obs[i] = 1.0 if self.heading == d else 0.0
-            i += 1
-
-        # Tracked plate mask bits (8)
-        for bit in range(MAX_TRACKED):
-            obs[i] = 1.0 if bool(self.plate_mask & (1 << bit)) else 0.0
-            i += 1
-
-        # Tracked coin mask bits (8)
-        for bit in range(MAX_TRACKED):
-            obs[i] = 1.0 if bool(self.coin_mask & (1 << bit)) else 0.0
-            i += 1
-
-        # One-hot level index (8)
-        for lvl in range(MAX_TRACKED):
-            obs[i] = 1.0 if lvl == self.level_index else 0.0
-            i += 1
-
-        # Door state, time remaining, death ratio, episode complete
-        obs[i] = 1.0 if self.doors_open else 0.0; i += 1
-        obs[i] = clamp(1.0 - self.level_steps / LEVEL_TIME_LIMIT_STEPS, 0.0, 1.0); i += 1
-        obs[i] = clamp(self.death_count / 10.0, 0.0, 1.0); i += 1
-        obs[i] = 1.0 if self.episode_complete else 0.0; i += 1
-
-        # Door sensor (visible, lateral, forward)
-        door_sensor = self._visible_door_sensor(10.0)
-        obs[i] = float(door_sensor["visible"]); i += 1
-        obs[i] = float(door_sensor["lateral"]); i += 1
-        obs[i] = float(door_sensor["forward"]); i += 1
-
-        # Moving obstacle phase features
-        rotator_visible = self._visible_set(self.rotators)
-        mover_visible = self._visible_set(self.movers)
-        sim_step = self.simulation_steps
-        for phase in range(3):
-            obs[i] = 1.0 if (rotator_visible and int(sim_step) % 3 == phase) else 0.0; i += 1
-        for phase in range(2):
-            obs[i] = 1.0 if (mover_visible and int(sim_step) % 2 == phase) else 0.0; i += 1
-
-        # Heading direction vectors (precomputed from direction table)
-        fwd_x, fwd_z = _DIRS[self.heading]
-        left_x, left_z = -fwd_z, fwd_x
-
-        # Cache attribute lookups in locals — avoids repeated self. resolution in inner loop
-        walls = self.walls
-        blocks = self.blocks
-        hazards = self.hazards
-        rotators = self._current_rotator_footprint()
-        movers = self.movers
-        platforms = self.platforms
-        stairs = self.stairs
-        coin_mask = self.coin_mask
-        coin_key_idx = self._coin_key_to_idx
-        plate_mask = self.plate_mask
-        plate_key_idx = self._plate_key_to_idx
-        switch_keys = self._switch_keys
-        switch_on = self.switch_on
-        exit_door_key = self._exit_door_key
-        doors_open = self.doors_open
+    # ── Static observation tensor ──────────────────────────────────────────────────────
+    def _build_static(self) -> None:
         size = self.size
-        los = self._has_line_of_sight
-        RADIUS = LOCAL_VIEW_RADIUS
-        CHANNELS = LOCAL_VIEW_CHANNELS
+        st = np.zeros((STATIC_CHANNELS, size + 2 * PAD, size + 2 * PAD), dtype=np.float32)
+        st[CH_WALL] = 1.0
+        st[CH_WALL, PAD:PAD + size, PAD:PAD + size] = 0.0
 
-        # Local view grid: 7 x 7 cells, LOCAL_VIEW_CHANNELS features each
-        for local_forward in range(RADIUS, -RADIUS - 1, -1):
-            for local_left in range(-RADIUS, RADIUS + 1):
-                wx = x + fwd_x * local_forward + left_x * local_left
-                wz = z + fwd_z * local_forward + left_z * local_left
-                key = f"{wx},{wz}"
+        def mark(channel: int, cells, value: float = 1.0) -> None:
+            for (cx, cz) in cells:
+                if 0 <= cx < size and 0 <= cz < size:
+                    st[channel, cx + PAD, cz + PAD] = value
 
-                if los([wx, wz], RADIUS):
-                    out_of_bounds = wx < 0 or wz < 0 or wx >= size or wz >= size
-                    obs[i]     = 1.0 if (out_of_bounds or key in walls) else 0.0
-                    obs[i + 1] = 1.0 if key in blocks else 0.0
-                    obs[i + 2] = 1.0 if key in hazards else 0.0
-                    obs[i + 3] = 1.0 if key in rotators else 0.0
-                    obs[i + 4] = 1.0 if key in movers else 0.0
-                    obs[i + 5] = 1.0 if key in platforms else 0.0
-                    obs[i + 6] = 1.0 if key in stairs else 0.0
+        mark(CH_WALL, self.walls)
+        mark(CH_HAZARD, self.hazards)
+        mark(CH_MOVER, self.movers)
+        mark(CH_PLATFORM, self.platforms)
+        self._static = st
+        self._sync_dynamic()
 
-                    # Coin: visible and not yet collected
-                    ci = coin_key_idx.get(key, -1)
-                    obs[i + 7] = 1.0 if (ci >= 0 and not (coin_mask & (1 << ci))) else 0.0
+    def _sync_dynamic(self) -> None:
+        """Refresh channels that change during play (blocks, coins, plates, door, switch)."""
+        st = self._static
+        size = self.size
+        st[CH_BLOCK] = 0.0
+        st[CH_COIN] = 0.0
+        st[CH_PLATE] = 0.0
+        st[CH_DOOR_CLOSED] = 0.0
+        st[CH_DOOR_OPEN] = 0.0
+        st[CH_SWITCH] = 0.0
+        for (cx, cz) in self.blocks:
+            if 0 <= cx < size and 0 <= cz < size:
+                st[CH_BLOCK, cx + PAD, cz + PAD] = 1.0
+        for i, c in enumerate(self.coins):
+            if not (self.coin_mask & (1 << i)):
+                st[CH_COIN, c[0] + PAD, c[1] + PAD] = 1.0
+        for i, p in enumerate(self.plates):
+            if not (self.plate_mask & (1 << i)):
+                st[CH_PLATE, p[0] + PAD, p[1] + PAD] = 1.0
+        ex, ez = self.exit_door
+        st[CH_DOOR_OPEN if self.doors_open else CH_DOOR_CLOSED, ex + PAD, ez + PAD] = 1.0
+        for (sx, sz) in self._switch_keys:
+            st[CH_SWITCH, sx + PAD, sz + PAD] = 1.0 if self.switch_on else 0.5
 
-                    # Plate: uncollected (ch8) or already collected (ch9)
-                    pi = plate_key_idx.get(key, -1)
-                    if pi >= 0:
-                        collected = bool(plate_mask & (1 << pi))
-                        obs[i + 8] = 0.0 if collected else 1.0
-                        obs[i + 9] = 1.0 if collected else 0.0
-                    else:
-                        obs[i + 8] = 0.0; obs[i + 9] = 0.0
-
-                    # Switch: off (ch10) or on (ch13)
-                    if key in switch_keys:
-                        obs[i + 10] = 0.0 if switch_on else 1.0
-                        obs[i + 11] = 0.0; obs[i + 12] = 0.0
-                        obs[i + 13] = 1.0 if switch_on else 0.0
-                    elif key == exit_door_key:
-                        # Exit door: closed (ch11) or open (ch12)
-                        obs[i + 10] = 0.0
-                        obs[i + 11] = 0.0 if doors_open else 1.0
-                        obs[i + 12] = 1.0 if doors_open else 0.0
-                        obs[i + 13] = 0.0
-                    else:
-                        obs[i + 10] = 0.0; obs[i + 11] = 0.0
-                        obs[i + 12] = 0.0; obs[i + 13] = 0.0
-                else:
-                    for j in range(CHANNELS):
-                        obs[i + j] = 0.0
-
-                i += CHANNELS
-
-        return obs
-
-    def _has_line_of_sight(self, target: List[int], max_distance: float) -> bool:
-        """Check line-of-sight ray between agent position and target cell."""
-        x, z = self.position
-        dx = target[0] - x
-        dz = target[1] - z
-        distance = math.hypot(dx, dz)
-        if distance > max_distance:
+    # ── Shortest-path distance field (the "compass") ───────────────────────────────────
+    def _standable(self, x: int, z: int) -> bool:
+        """Cells the agent can safely stand on, ignoring (time-varying) rotating bars."""
+        if x < 0 or z < 0 or x >= self.size or z >= self.size:
             return False
-
-        steps = math.ceil(max(abs(dx), abs(dz)))
-        walls = self.walls
-        blocks = self.blocks
-        for step in range(1, steps):
-            sx = round(x + dx * step / steps)
-            sz = round(z + dz * step / steps)
-            k = f"{sx},{sz}"
-            if k in walls or k in blocks:
-                return False
+        c = (x, z)
+        if c in self.walls or c in self.blocks or c in self.hazards or c in self.movers or c in self.rotators:
+            return False
+        if c == self._exit_door_key and not self.doors_open:
+            return False
         return True
 
-    def _visible_set(self, cells: Set[str]) -> bool:
-        """Check if any cell in a given set is within radius and line-of-sight."""
-        px, pz = self.position
-        RADIUS = LOCAL_VIEW_RADIUS
-        los = self._has_line_of_sight
-        for key in cells:
-            cx, cz = map(int, key.split(","))
-            if max(abs(cx - px), abs(cz - pz)) <= RADIUS and los([cx, cz], RADIUS):
-                return True
-        return False
+    def _refresh_objective(self) -> None:
+        """Recompute targets and the Dijkstra distance field to the nearest objective."""
+        targets = [(p[0], p[1]) for i, p in enumerate(self.plates) if not (self.plate_mask & (1 << i))]
+        self._plates_remaining = len(targets)
+        if not targets:
+            targets = [self._exit_door_key]
+        self._targets = targets
 
-    def _visible_door_sensor(self, max_distance: float) -> Dict[str, float]:
-        """Compute relative forward and lateral distance to the exit door if visible."""
-        x, z = self.position
-        door_x, door_z = self.exit_door
-        dx = door_x - x
-        dz = door_z - z
-        distance = math.hypot(dx, dz)
-        if distance == 0 or not self._has_line_of_sight(self.exit_door, max_distance):
-            return {"visible": 0.0, "lateral": 0.0, "forward": 0.0}
+        size = self.size
+        dist = [INF] * (size * size)
+        heap: List[Tuple[float, int, int]] = []
+        for (tx, tz) in targets:
+            if 0 <= tx < size and 0 <= tz < size:
+                dist[tx * size + tz] = 0.0
+                heap.append((0.0, tx, tz))
+        heapq.heapify(heap)
+        jumpables = self.hazards | self.rotators | self.movers
+        standable = self._standable
+        while heap:
+            d, x, z = heapq.heappop(heap)
+            if d > dist[x * size + z]:
+                continue
+            for fx, fz in _DIRS:
+                nx, nz = x + fx, z + fz
+                if standable(nx, nz) and d + 1.0 < dist[nx * size + nz]:
+                    dist[nx * size + nz] = d + 1.0
+                    heapq.heappush(heap, (d + 1.0, nx, nz))
+                # A jump launched from (x - 2f) over a hazard at (x - f) lands here.
+                if (x - fx, z - fz) in jumpables:
+                    ax, az = x - 2 * fx, z - 2 * fz
+                    if standable(ax, az) and d + JUMP_COST < dist[ax * size + az]:
+                        dist[ax * size + az] = d + JUMP_COST
+                        heapq.heappush(heap, (d + JUMP_COST, ax, az))
+        self._dist = dist
+        self._dist_np = np.array(dist, dtype=np.float64).reshape(size, size)
 
-        fwd_x, fwd_z = _DIRS[self.heading]
-        left_x, left_z = -fwd_z, fwd_x
-        return {
-            "visible": 1.0,
-            "lateral": (dx * left_x + dz * left_z) / max_distance,
-            "forward": (dx * fwd_x + dz * fwd_z) / max_distance,
-        }
-
-    def _visible_objective_target(self) -> Optional[List[int]]:
-        """Identify the closest visible objective (remaining plate or exit door)."""
-        remaining_plates = [p for idx, p in enumerate(self.plates) if not (self.plate_mask & (1 << idx))]
-        if remaining_plates:
-            px, pz = self.position
-            RADIUS = LOCAL_VIEW_RADIUS
-            los = self._has_line_of_sight
-            visible = [
-                p for p in remaining_plates
-                if max(abs(p[0] - px), abs(p[1] - pz)) <= RADIUS and los(p, RADIUS)
-            ]
-            if not visible:
-                return None
-            return min(visible, key=lambda c: abs(c[0] - self.position[0]) + abs(c[1] - self.position[1]))
-
-        return self.exit_door if self._visible_door_sensor(10.0)["visible"] else None
-
-    def _static_blocked(self, x: int, z: int) -> bool:
-        """Check walls, blocks, and sealed doors without moving obstacles."""
+    def _dist_at(self, x: int, z: int) -> float:
         if x < 0 or z < 0 or x >= self.size or z >= self.size:
-            return True
-        k = f"{x},{z}"
-        return k in self.walls or k in self.blocks or (k == self._exit_door_key and not self.doors_open)
+            return INF
+        return self._dist[x * self.size + z]
 
-    def _rotator_overlaps(self, x: float, z: float, rotor: List[int], time_seconds: float, jump_height: float = 0.0, index: int = 0) -> bool:
-        """Test the player's box against the rotating Rapier bar collider."""
-        player_center_y = PLAYER_CENTER_Y + jump_height
-        if abs(player_center_y - 0.55) > 0.37 + 0.12:
-            return False
-
-        speed = float(self.level.get("rotatorSpeed", 1.1))
-        direction = -1.0 if index % 2 else 1.0
-        angle = time_seconds * speed * direction
-        cosine = math.cos(angle)
-        sine = math.sin(angle)
-        dx = x - rotor[0]
-        dz = z - rotor[1]
+    # ── Rotating bars ──────────────────────────────────────────────────────────────────
+    def _rotator_matrix(self, xs, zs, times, jump_heights) -> np.ndarray:
+        """Overlap of player boxes (S points) against every rotating bar -> bool (S, R)."""
+        xs = np.asarray(xs, dtype=np.float64)
+        zs = np.asarray(zs, dtype=np.float64)
+        angle = np.asarray(times, dtype=np.float64)[:, None] * self._rot_speed * self._rot_dir[None, :]
+        cosine = np.cos(angle)
+        sine = np.sin(angle)
+        dx = xs[:, None] - self._rot_x[None, :]
+        dz = zs[:, None] - self._rot_z[None, :]
         local_x = dx * cosine - dz * sine
         local_z = dx * sine + dz * cosine
-
-        # Minkowski-expand the bar by the player's half-width so contact is
-        # registered before the rendered box can visibly clip into the beam.
-        return abs(local_x) <= ROTATOR_HALF_LENGTH + 0.37 and abs(local_z) <= ROTATOR_HALF_THICKNESS + 0.37
+        height_ok = np.abs(PLAYER_CENTER_Y + np.asarray(jump_heights, dtype=np.float64) - 0.55) <= 0.37 + 0.12
+        return (np.abs(local_x) <= _LIMIT_X) & (np.abs(local_z) <= _LIMIT_Z) & height_ok[:, None]
 
     def _rotator_blocker(self, x: float, z: float, time_seconds: Optional[float] = None, jump_height: float = 0.0) -> Optional[List[int]]:
         """Find a rotor overlapping this player position at a specific time."""
+        if not self.rotator_cells:
+            return None
         if time_seconds is None:
-            time_seconds = self.simulation_steps * RL_ACTION_DURATION_SECONDS
-        for index, rotor in enumerate(self.rotator_cells):
-            if self._rotator_overlaps(x, z, rotor, time_seconds, jump_height, index):
-                return rotor
+            time_seconds = self.sim_time_seconds
+        hit = self._rotator_matrix([x], [z], [time_seconds], [jump_height])[0]
+        if hit.any():
+            return self.rotator_cells[int(np.argmax(hit))]
         return None
 
     def _rotator_collision_during_move(self, start: List[int], end: List[int], duration: float, jumping: bool = False) -> Optional[List[int]]:
         """Sweep player movement and rotor rotation over the action duration."""
-        start_time = self.simulation_steps * RL_ACTION_DURATION_SECONDS
+        if not self.rotator_cells:
+            return None
+        start_time = self.sim_time_seconds
         travel = math.hypot(end[0] - start[0], end[1] - start[1])
-        max_speed = max(0.1, float(self.level.get("rotatorSpeed", 1.1)))
+        max_speed = max(0.1, self._rot_speed)
         samples = max(6, math.ceil(travel / 0.08), math.ceil(max_speed * duration / 0.06))
 
-        for index, rotor in enumerate(self.rotator_cells):
-            starts_overlapping = self._rotator_overlaps(start[0], start[1], rotor, start_time, 0.0, index)
-            ends_overlapping = self._rotator_overlaps(end[0], end[1], rotor, start_time + duration, 0.0, index)
-            if starts_overlapping and not ends_overlapping and not jumping:
+        amounts = np.arange(1, samples + 1, dtype=np.float64) / samples
+        px = start[0] + (end[0] - start[0]) * amounts
+        pz = start[1] + (end[1] - start[1]) * amounts
+        times = start_time + duration * amounts
+        if jumping:
+            jt = duration * amounts
+            heights = np.maximum(0.0, PLAYER_JUMP_IMPULSE * jt - 0.5 * WORLD_GRAVITY * jt * jt)
+        else:
+            heights = np.zeros(samples)
+        hits = self._rotator_matrix(px, pz, times, heights)  # (S, R)
+
+        ends = self._rotator_matrix([end[0]], [end[1]], [start_time + duration], [0.0])[0]
+        starts = self._rotator_matrix([start[0]], [start[1]], [start_time], [0.0])[0]
+        any_hit = hits.any(axis=0)
+        for index in range(len(self.rotator_cells)):
+            if starts[index] and not ends[index] and not jumping:
                 # Let an already-overlapping agent step out of the collider.
                 continue
-
-            for sample in range(1, samples + 1):
-                amount = sample / samples
-                px = start[0] + (end[0] - start[0]) * amount
-                pz = start[1] + (end[1] - start[1]) * amount
-                jump_time = duration * amount if jumping else 0.0
-                jump_height = max(0.0, PLAYER_JUMP_IMPULSE * jump_time - 0.5 * WORLD_GRAVITY * jump_time * jump_time)
-                if self._rotator_overlaps(px, pz, rotor, start_time + duration * amount, jump_height, index):
-                    return rotor
+            if any_hit[index]:
+                return self.rotator_cells[index]
         return None
 
-    def _current_rotator_footprint(self) -> Set[str]:
-        """Rasterize the currently visible collider footprint into perception cells."""
-        time_seconds = self.simulation_steps * RL_ACTION_DURATION_SECONDS
-        footprint: Set[str] = set()
-        for index, rotor in enumerate(self.rotator_cells):
-            for dx in range(-2, 3):
-                for dz in range(-2, 3):
-                    x, z = rotor[0] + dx, rotor[1] + dz
-                    if (0 <= x < self.size and 0 <= z < self.size
-                            and self._rotator_overlaps(x, z, rotor, time_seconds, 0.0, index)):
-                        footprint.add(key_of([x, z]))
-        return footprint
+    def _danger_layers(self, wx: np.ndarray, wz: np.ndarray) -> np.ndarray:
+        """Bool (H, W, W): cell is swept by a bar during action k (k = 0 is the action about to be taken)."""
+        horizon = DANGER_HORIZON
+        out = np.zeros((horizon, LOCAL_VIEW_WIDTH, LOCAL_VIEW_WIDTH), dtype=np.float32)
+        if not self.rotator_cells:
+            return out
+        half = RL_ACTION_DURATION_SECONDS / 2.0
+        times = self.sim_time_seconds + np.arange(2 * horizon + 1) * half  # (T,)
+        angle = times[:, None] * self._rot_speed * self._rot_dir[None, :]  # (T, R)
+        cosine = np.cos(angle)[None, :, :]
+        sine = np.sin(angle)[None, :, :]
+        dx = (wx.reshape(-1, 1, 1) - self._rot_x[None, None, :])
+        dz = (wz.reshape(-1, 1, 1) - self._rot_z[None, None, :])
+        local_x = dx * cosine - dz * sine
+        local_z = dx * sine + dz * cosine
+        hit = ((np.abs(local_x) <= _LIMIT_X) & (np.abs(local_z) <= _LIMIT_Z)).any(axis=2)  # (N, T)
+        for k in range(horizon):
+            out[k] = hit[:, 2 * k:2 * k + 3].any(axis=1).reshape(LOCAL_VIEW_WIDTH, LOCAL_VIEW_WIDTH)
+        return out
+
+    # ── Observation ────────────────────────────────────────────────────────────────────
+    def observe(self) -> np.ndarray:
+        """Egocentric local grid + scalar compass features (float32, length OBSERVATION_SIZE)."""
+        x, z = self.position
+        h = self.heading
+        obs = self._obs
+        width = LOCAL_VIEW_WIDTH
+
+        wx = x + _DX[h]
+        wz = z + _DZ[h]
+        view = obs[:LOCAL_VIEW_SIZE].reshape(LOCAL_VIEW_CHANNELS, width, width)
+        view[:STATIC_CHANNELS] = self._static[:, wx + PAD, wz + PAD]
+        view[STATIC_CHANNELS:] = self._danger_layers(wx, wz)
+
+        fx, fz = _DIRS[h]
+        lx, lz = -fz, fx
+        d_cur = self._dist_at(x, z)
+        reachable = d_cur < INF
+        s = obs[_SCALAR_START:]
+        # Compass: +1 -> this move is on a shortest path, -1 -> blocked or moves away.
+        for slot, (mx, mz) in enumerate(((fx, fz), (-fx, -fz), (lx, lz), (-lx, -lz))):
+            nd = self._dist_at(x + mx, z + mz)
+            s[slot] = clamp(d_cur - nd, -1.0, 1.0) if (reachable and nd < INF) else -1.0
+        # Jump gain (only meaningful when a hazard / bar / mover sits directly ahead).
+        jump_gain = 0.0
+        if reachable and (x + fx, z + fz) in (self.hazards | self.rotators | self.movers):
+            ld = self._dist_at(x + 2 * fx, z + 2 * fz)
+            if ld < INF:
+                jump_gain = clamp((d_cur - ld) / JUMP_COST, -1.0, 1.0)
+        s[4] = jump_gain
+        s[5] = min(d_cur, 40.0) / 40.0 if reachable else 1.0
+
+        tx, tz = min(self._targets, key=lambda t: abs(t[0] - x) + abs(t[1] - z))
+        ddx, ddz = tx - x, tz - z
+        s[6] = clamp((ddx * fx + ddz * fz) / self.size, -1.0, 1.0)
+        s[7] = clamp((ddx * lx + ddz * lz) / self.size, -1.0, 1.0)
+        s[8] = 1.0 if self._plates_remaining else 0.0
+        s[9] = 0.0 if self._plates_remaining else 1.0
+        s[10] = clamp(1.0 - self.level_steps / LEVEL_TIME_LIMIT_STEPS, 0.0, 1.0)
+        s[11] = 1.0 if self.doors_open else 0.0
+        s[12] = self._plates_remaining / max(1, len(self.plates))
+        s[13] = (len(self.coins) - bin(self.coin_mask).count("1")) / max(1, len(self.coins))
+        even = int(self.simulation_steps) % 2 == 0
+        s[14] = 1.0 if even else 0.0
+        s[15] = 0.0 if even else 1.0
+        return obs
+
+    def action_mask(self) -> np.ndarray:
+        """Boolean mask of *sensible* actions in the current state (invalid-action masking).
+
+        Masks only actions that can never help: walking into walls, stepping on lava, walking
+        into a bar's hub, jumping with nothing to jump over, or pressing E with no switch ahead.
+        Everything that needs *judgement* (timing a bar, when to wait, when to jump) stays open.
+        """
+        mask = np.ones(len(ACTIONS), dtype=bool)
+        x, z = self.position
+        fx, fz = _DIRS[self.heading]
+        directions = ((fx, fz), (-fx, -fz), (-fz, fx), (fz, -fx))
+        for slot, (dx, dz) in enumerate(directions):
+            cell = (x + dx, z + dz)
+            if cell in self.blocks:
+                beyond = (cell[0] + dx, cell[1] + dz)
+                if self._static_blocked(*beyond):
+                    mask[slot] = False
+            elif self._static_blocked(*cell) or cell in self.hazards or cell in self.rotators:
+                mask[slot] = False
+        first = (x + fx, z + fz)
+        landing = (x + 2 * fx, z + 2 * fz)
+        mask[6] = (
+            first in self.hazards or first in self.rotators or first in self.movers
+        ) and not self._static_blocked(*landing) and landing not in self.hazards and landing not in self.movers
+        mask[7] = first in self._switch_keys
+        return mask
+
+    # ── Dynamics ───────────────────────────────────────────────────────────────────────
+    def _static_blocked(self, x: int, z: int) -> bool:
+        """Check walls, blocks, and sealed doors without moving obstacles."""
+        if x < 0 or z < 0 or x >= self.size or z >= self.size:
+            return True
+        k = (x, z)
+        return k in self.walls or k in self.blocks or (k == self._exit_door_key and not self.doors_open)
 
     def _blocked(self, x: int, z: int) -> bool:
-        """Check walls, blocks, and sealed doors; rotors are checked over time."""
         return self._static_blocked(x, z)
 
     def _push_from_rotator(self, position: List[int], rotor: List[int], fallback: Optional[List[int]] = None):
@@ -476,7 +536,8 @@ class WorldEnvironment:
 
     def step(self, action: int) -> Dict[str, Any]:
         """Advance the environment by taking one action."""
-        reward = self.rewards["timeStep"]
+        rw = self.rewards
+        reward = rw["timeStep"]
         done = False
         success = False
         level_changed = False
@@ -485,17 +546,13 @@ class WorldEnvironment:
         death = False
         timed_out = False
         rotator_hit = False
+        objective_changed = False
         knockback: Optional[Dict[str, float]] = None
-        jump_over_key: Optional[str] = None
+        jump_over_key: Optional[Cell] = None
         previous_position = list(self.position)
+        dist_before = self._dist_at(previous_position[0], previous_position[1])
 
         action_id = ACTIONS[action]["id"] if 0 <= action < len(ACTIONS) else "wait"
-        visible_target = self._visible_objective_target()
-        before_distance = (
-            abs(visible_target[0] - self.position[0]) + abs(visible_target[1] - self.position[1])
-            if visible_target else None
-        )
-
         fx, fz = _DIRS[self.heading]
         move: Optional[List[int]] = None
         time_steps_used = 1.0
@@ -515,63 +572,59 @@ class WorldEnvironment:
             move = [fz, -fx]
         elif action_id == "jump":
             time_steps_used = PLAYER_JUMP_DURATION_SECONDS / RL_ACTION_DURATION_SECONDS
-            if key_of(self.position) in self.rotators:
+            if tuple(self.position) in self.rotators:
                 move = [0, 0]
             else:
-                first_cell = [self.position[0] + fx, self.position[1] + fz]
-                landing = [self.position[0] + fx * 2, self.position[1] + fz * 2]
-                first_key = key_of(first_cell)
-                landing_key = key_of(landing)
-                jumpable = first_key in self.hazards or first_key in self.rotators or first_key in self.movers
-                landing_is_hazard = landing_key in self.hazards or landing_key in self.movers
+                first_cell = (self.position[0] + fx, self.position[1] + fz)
+                landing = (self.position[0] + fx * 2, self.position[1] + fz * 2)
+                jumpable = first_cell in self.hazards or first_cell in self.rotators or first_cell in self.movers
+                landing_is_hazard = landing in self.hazards or landing in self.movers
                 if jumpable and not self._blocked(landing[0], landing[1]) and not landing_is_hazard:
                     move = [fx * 2, fz * 2]
-                    jump_over_key = first_key
+                    jump_over_key = first_cell
                 else:
                     move = [fx, fz]
         elif action_id == "interact":
-            facing_key = key_of([self.position[0] + fx, self.position[1] + fz])
-            if facing_key in self._switch_keys:
+            facing = (self.position[0] + fx, self.position[1] + fz)
+            if facing in self._switch_keys:
                 self.switch_on = not self.switch_on
-                reward += self.rewards["switch"]
+                reward += rw["switch"]
+                self._sync_dynamic()
             else:
-                reward += self.rewards["invalidInteract"]
+                reward += rw["invalidInteract"]
 
         if move:
             nx, nz = self.position[0] + move[0], self.position[1] + move[1]
-            key = f"{nx},{nz}"
+            key = (nx, nz)
 
             if key in self.blocks:
-                beyond = [nx + move[0], nz + move[1]]
-                beyond_key = key_of(beyond)
+                beyond = (nx + move[0], nz + move[1])
                 beyond_blocked = (
                     beyond[0] < 0 or beyond[1] < 0 or beyond[0] >= self.size or beyond[1] >= self.size
-                    or beyond_key in self.walls or beyond_key in self.blocks
-                    or (beyond_key == self._exit_door_key and not self.doors_open)
+                    or beyond in self.walls or beyond in self.blocks
+                    or (beyond == self._exit_door_key and not self.doors_open)
                 )
                 if not beyond_blocked:
                     self.blocks.remove(key)
-                    self.blocks.add(beyond_key)
-                    reward += self.rewards["pushBlock"]
+                    self.blocks.add(beyond)
+                    reward += rw["pushBlock"]
+                    objective_changed = True
+                    self._sync_dynamic()
+                    self._refresh_objective()  # a pushed block can alter the maze
 
             rotor = self._rotator_collision_during_move(
-                previous_position,
-                [nx, nz],
-                time_steps_used * RL_ACTION_DURATION_SECONDS,
-                jumping,
+                previous_position, [nx, nz], time_steps_used * RL_ACTION_DURATION_SECONDS, jumping,
             )
             if self._static_blocked(nx, nz):
                 collision = True
                 self.collision_count += 1
-                reward += self.rewards["collision"]
+                reward += rw["collision"]
             elif rotor:
                 collision = True
                 rotator_hit = True
                 self.collision_count += 1
-                reward += self.rewards["rotatorCollision"]
-                self.position, knockback = self._push_from_rotator(
-                    previous_position, rotor, [-fx, -fz]
-                )
+                reward += rw["rotatorCollision"]
+                self.position, knockback = self._push_from_rotator(previous_position, rotor, [-fx, -fz])
             else:
                 self.position = [nx, nz]
                 if key in self.hazards:
@@ -579,63 +632,59 @@ class WorldEnvironment:
                     death = True
                     self.death_count += 1
                     self.collision_count += 1
-                    reward += self.rewards["hazard"] + self.rewards["deathPenalty"]
+                    reward += rw["hazard"] + rw["deathPenalty"]
                     self._load_level(self.level)
                 else:
-                    if jump_over_key and key_of([nx - fx, nz - fz]) == jump_over_key:
-                        reward += self.rewards["jumpHazard"]
+                    if jump_over_key and (nx - fx, nz - fz) == jump_over_key:
+                        reward += rw["jumpHazard"]
 
                     ci = self._coin_key_to_idx.get(key, -1)
                     if ci >= 0 and not (self.coin_mask & (1 << ci)):
                         self.coin_mask |= 1 << ci
                         self.total_coins += 1
-                        reward += self.rewards["coin"]
+                        reward += rw["coin"]
+                        self._sync_dynamic()
 
                     pi = self._plate_key_to_idx.get(key, -1)
                     if pi >= 0 and not (self.plate_mask & (1 << pi)):
                         self.plate_mask |= 1 << pi
                         self.total_plates += 1
-                        reward += self.rewards["plate"]
+                        reward += rw["plate"]
+                        objective_changed = True
                         if self.plate_mask == (1 << len(self.plates)) - 1:
                             self.doors_open = True
-                            reward += self.rewards["doorOpen"]
+                            reward += rw["doorOpen"]
+                        self._sync_dynamic()
+                        self._refresh_objective()
 
                     if key in self.movers and int(self.simulation_steps) % 2 == 0:
                         collision = True
                         self.collision_count += 1
-                        reward += self.rewards["moverCollision"]
+                        reward += rw["moverCollision"]
 
                     if key in self.platforms:
                         collision = True
                         self.collision_count += 1
-                        reward += self.rewards["platformCollision"]
+                        reward += rw["platformCollision"]
 
         elif (rotor := self._rotator_collision_during_move(
-            previous_position,
-            previous_position,
-            time_steps_used * RL_ACTION_DURATION_SECONDS,
-            jumping,
+            previous_position, previous_position, time_steps_used * RL_ACTION_DURATION_SECONDS, jumping,
         )) is not None:
-            # A rotating bar can strike a stationary agent during wait, turn,
-            # or interaction actions as well as during translation.
             collision = True
             rotator_hit = True
             self.collision_count += 1
-            reward += self.rewards["rotatorCollision"]
-            self.position, knockback = self._push_from_rotator(
-                previous_position, rotor, [-fx, -fz]
-            )
+            reward += rw["rotatorCollision"]
+            self.position, knockback = self._push_from_rotator(previous_position, rotor, [-fx, -fz])
 
         self.episode_steps += 1
         self.simulation_steps += time_steps_used
         if not death:
             self.level_steps += time_steps_used
 
-        # Check door reach / level clear
-        pos_key = key_of(self.position)
+        pos_key = (self.position[0], self.position[1])
         if not done and not death and self.doors_open and pos_key == self._exit_door_key:
-            reward += self.rewards["goal"]
-            reward += self.rewards["speedBonus"] * clamp(1.0 - self.level_steps / LEVEL_TIME_LIMIT_STEPS, 0.0, 1.0)
+            reward += rw["goal"]
+            reward += rw["speedBonus"] * clamp(1.0 - self.level_steps / LEVEL_TIME_LIMIT_STEPS, 0.0, 1.0)
             if self.level_index + 1 < len(self.levels):
                 self.level_index += 1
                 self.level_changes += 1
@@ -646,24 +695,22 @@ class WorldEnvironment:
                 success = True
                 self.episode_complete = True
 
-        # Timeout penalty & restart
         if not done and not death and not level_changed and self.level_steps >= LEVEL_TIME_LIMIT_STEPS:
             death = True
             timed_out = True
             self.death_count += 1
-            reward += self.rewards["deathPenalty"]
+            reward += rw["deathPenalty"]
             self._load_level(self.level)
 
-        # Progress reward based on distance to visible target
-        if not done and not death and not level_changed and move and not collision and visible_target:
-            after_distance = abs(visible_target[0] - self.position[0]) + abs(visible_target[1] - self.position[1])
-            if after_distance < before_distance:
-                reward += self.rewards["progress"]
-            elif after_distance > before_distance:
-                reward -= self.rewards["progress"]
+        # Potential-based shaping on the shortest-path distance to the current objective.
+        # (Skipped on steps where the objective itself changed: plate pressed, level loaded...)
+        if not (death or level_changed or done or objective_changed):
+            dist_after = self._dist_at(self.position[0], self.position[1])
+            if dist_before < INF and dist_after < INF:
+                reward += rw["progress"] * (dist_before - dist_after)
 
         return {
-            "observation": list(self.observe()),  # list() copies the cached array
+            "observation": self.observe().copy(),
             "reward": reward,
             "done": done,
             "success": success,
@@ -673,7 +720,7 @@ class WorldEnvironment:
             "collision": collision,
             "rotatorHit": rotator_hit,
             "knockback": knockback,
-            "jumpOverKey": jump_over_key,
+            "jumpOverKey": key_of(jump_over_key) if jump_over_key else None,
             "timeStepsUsed": time_steps_used,
             "levelChanged": level_changed,
             "steps": self.episode_steps,
@@ -683,4 +730,5 @@ class WorldEnvironment:
             "coins": self.total_coins,
             "plates": self.total_plates,
             "level": self.level_index,
+            "simTime": self.sim_time_seconds,
         }

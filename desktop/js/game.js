@@ -14,6 +14,14 @@ import {
 } from './constants.js';
 
 const $ = (id) => document.getElementById(id);
+const BEST_KEY = 'the-real-exit-best-v1';
+
+function readBest() {
+  try { return JSON.parse(localStorage.getItem(BEST_KEY) || '{}') || {}; } catch { return {}; }
+}
+function writeBest(best) {
+  try { localStorage.setItem(BEST_KEY, JSON.stringify(best)); } catch { /* storage unavailable */ }
+}
 
 export class GameManager {
   constructor() {
@@ -60,7 +68,7 @@ export class GameManager {
     $('worldEyebrow').textContent = this.world.standalone
       ? 'STANDALONE LEVEL'
       : `CAMPAIGN · LEVEL ${index + 1} OF ${this.campaignLevels.length}`;
-    $('worldDescription').textContent = 'Press the plate, dodge the rotating bar, and cross the open door.';
+    $('worldDescription').textContent = (this.world.hazards || []).length ? 'Press the plate, jump the lava, dodge the bars, grab coins, and cross the door.' : 'Press the plate, dodge the rotating bar, and cross the open door.';
   }
 
   beginCampaign() {
@@ -92,9 +100,26 @@ export class GameManager {
     if (showMessage && toast) toast('Run restarted');
   }
 
+  /** Star rating: 1 = cleared, 2 = fast, 3 = fast + every coin (or very fast when the room has no coins). */
+  rateRun(seconds) {
+    const coins = (this.world.coins || []).length;
+    const allCoins = coins > 0 && this.collected.size >= coins;
+    if (seconds <= 6 && (allCoins || (coins === 0 && seconds <= 4.5))) return 3;
+    return seconds <= 6 ? 2 : 1;
+  }
+
   winRun(toast) {
     if (this.won) return;
     this.won = true;
+
+    const seconds = (Date.now() - this.levelStartedAt) / 1000;
+    const stars = this.rateRun(seconds);
+    const best = readBest();
+    const previous = best[this.world.name];
+    const record = !previous || seconds < previous.time;
+    best[this.world.name] = { time: record ? seconds : previous.time, stars: Math.max(stars, previous?.stars || 0) };
+    if (!this.playbackActive) writeBest(best); // AI playback never sets human records
+    if (toast) toast(`${'★'.repeat(stars)}${'☆'.repeat(3 - stars)}  ${seconds.toFixed(1)}s${record ? ' · new best!' : ` · best ${previous.time.toFixed(1)}s`}`);
 
     if (this.world.standalone) {
       if (toast) toast('Congratulations! Level complete!');
@@ -115,14 +140,28 @@ export class GameManager {
     this.updateUI();
   }
 
-  updateGameplay(dt, player, plateMeshes, exitDoorMesh, toast, isPlayback = false) {
+  updateGameplay(dt, player, plateMeshes, exitDoorMesh, toast, isPlayback = false, coinMeshes = []) {
     if (this.won) return;
+    this.playbackActive = isPlayback;
+
+    // Coin pickups (the room's coins are worth star rating and AI reward)
+    for (const coin of coinMeshes) {
+      const i = coin.userData?.coinIndex;
+      if (i === undefined || this.collected.has(i) || !this.world.coins?.[i]) continue;
+      const p = gridToWorld(this.world.coins[i][0], this.world.coins[i][1]);
+      if (Math.hypot(player.x - p.x, player.z - p.z) < 0.55 && player.jumpY < 1.1) {
+        this.collected.add(i);
+        coin.visible = false;
+        if (toast) toast(`Coin ${this.collected.size} / ${this.world.coins.length}`);
+        this.updateUI();
+      }
+    }
 
     this.elapsedSeconds = Math.floor((Date.now() - this.startedAt) / 1000);
     this.drawElapsed();
 
-    // Level Time Limit
-    if (Date.now() - this.levelStartedAt >= LEVEL_TIME_LIMIT_SECONDS * 1000) {
+    // Level Time Limit (during AI playback the Python environment owns the clock)
+    if (!isPlayback && Date.now() - this.levelStartedAt >= LEVEL_TIME_LIMIT_SECONDS * 1000) {
       const failedLevel = this.activeLevelIndex + 1;
       this.runDeaths++;
       this.resetRun(false);
@@ -240,7 +279,9 @@ export class GameManager {
     this.campaignLevels.forEach((level, index) => {
       const button = document.createElement('button');
       button.className = `level-select${index === this.activeLevelIndex ? ' active' : ''}`;
-      button.textContent = `${String(index + 1).padStart(2, '0')}  ${level.name}`;
+      const record = readBest()[level.name];
+      const stars = record ? '★'.repeat(record.stars) + '☆'.repeat(3 - record.stars) : '';
+      button.textContent = `${String(index + 1).padStart(2, '0')}  ${level.name}${stars ? `  ${stars}` : ''}`;
       button.addEventListener('click', () => this.loadCampaignLevel(index));
       host.append(button);
     });
@@ -276,7 +317,7 @@ export class GameManager {
     this.campaignLevels = freshCampaign();
     this.loadCampaignLevel(0);
     this.saveWorld(false);
-    if (toast) toast('Four-level campaign restored');
+    if (toast) toast('Eight-level campaign restored');
   }
 }
 

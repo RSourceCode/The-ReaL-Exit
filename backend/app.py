@@ -60,7 +60,7 @@ class BackendApp:
                 hyperparameters=data.get("hyperparameters"),
                 levels=data.get("levels"),
                 seed=int(data.get("seed", 17)),
-                max_episode_steps=int(data.get("maxEpisodeSteps", 240)),
+                max_episode_steps=int(data.get("maxEpisodeSteps", 300)),
                 checkpoint=checkpoint,
                 rewards=data.get("rewards"),
             )
@@ -80,7 +80,8 @@ class BackendApp:
                 raise ValueError("No active training session. Call /train/init first.")
             if self.training_thread and self.training_thread.is_alive():
                 raise ValueError("Training is already running.")
-            self.training_target_steps = max(self.trainer.total_steps + 1, int(data.get("targetSteps", 50000)))
+            self.training_target_steps = max(self.trainer.total_steps + 1, int(data.get("targetSteps", 300000)))
+            self.trainer.set_target_steps(self.training_target_steps)
             self.training_chunk_size = max(64, min(8192, int(data.get("stepBudget", 2048))))
             self.training_stop.clear()
             self.training_paused = False
@@ -160,10 +161,11 @@ class BackendApp:
     def handle_train_chunk(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Run a batch chunk of steps in the active trainer."""
         step_budget = int(data.get("stepBudget", 512))
-        target_steps = int(data.get("targetSteps", 50000))
+        target_steps = int(data.get("targetSteps", 300000))
         with self.training_lock:
             if not self.trainer:
                 raise ValueError("No active training session. Call /train/init first.")
+            self.trainer.set_target_steps(target_steps)
             if self.training_state in ("running", "paused", "stopping"):
                 raise ValueError("Use the background training controls while a run is active.")
             chunk_result = self.trainer.run_chunk(step_budget)
@@ -218,14 +220,15 @@ class BackendApp:
             raise ValueError("No levels provided for playback.")
         seed = int(data.get("seed", 431))
         rewards = data.get("rewards") or (self.trainer.rewards if self.trainer else None)
-        self.playback_env = WorldEnvironment(levels, {"seed": seed, "rewards": rewards})
-        obs = self.playback_env.reset()
+        # Real rules for playback: start at level 1, rotators start at t = 0 (the 3D scene is synced to simTime).
+        self.playback_env = WorldEnvironment(levels, {"seed": seed, "rewards": rewards, "randomPhase": False})
+        self.playback_env.reset(0)
         return {
             "status": "ready",
             "levelIndex": self.playback_env.level_index,
             "position": self.playback_env.position,
             "heading": self.playback_env.heading,
-            "observation": obs,
+            "simTime": self.playback_env.sim_time_seconds,
         }
 
     def handle_playback_step(self, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -233,17 +236,19 @@ class BackendApp:
         if not self.playback_env:
             raise ValueError("Playback environment not started. Call /playback/start first.")
 
-        obs = self.playback_env.observe()
-        state_key = self.playback_env.get_state_key()
+        env = self.playback_env
+        obs = env.observe()
 
         if self.trainer and self.trainer.agent:
-            decision = self.trainer.agent.act(obs, state_key, explore=False)
+            decision = self.trainer.agent.act(obs, "", explore=False, mask=env.action_mask())
             action = decision["action"]
         else:
             action = 8  # wait
 
-        previous_pos = list(self.playback_env.position)
-        result = self.playback_env.step(action)
+        previous_pos = list(env.position)
+        sim_before = env.sim_time_seconds
+        result = env.step(action)
+        result.pop("observation", None)  # large and unused by the 3D client
 
         return {
             "action": action,
@@ -256,6 +261,8 @@ class BackendApp:
             "levelIndex": self.playback_env.level_index,
             "deathCount": self.playback_env.death_count,
             "coins": self.playback_env.total_coins,
+            "simTimeBefore": sim_before,
+            "simTimeAfter": self.playback_env.sim_time_seconds,
             "result": result,
         }
 

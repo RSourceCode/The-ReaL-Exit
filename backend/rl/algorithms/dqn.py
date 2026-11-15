@@ -1,228 +1,169 @@
-"""Deep Q-Network (DQN) with experience replay, target network, and Huber loss."""
+"""Double DQN in numpy: replay memory, target network, Huber loss, Adam."""
 
 import math
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
+
+import numpy as np
 
 from backend.config import ACTIONS, OBSERVATION_SIZE
 from backend.rl.algorithms.base import BaseAgent
+from backend.rl.nn import Adam, orthogonal
 
 METADATA = {
     "id": "dqn",
-    "name": "DQN · Replay Q-Network",
-    "description": "Off-policy value learning with a small neural Q-network and replay memory.",
+    "name": "DQN · Double Q-Network",
+    "description": "Off-policy Double DQN with replay memory on the egocentric view. Slower to start than PPO but sample-efficient once warm.",
     "defaults": {
-        "learningRate": 0.001,
+        "learningRate": 0.0005,
         "discount": 0.99,
         "epsilonStart": 1.0,
-        "epsilonEnd": 0.05,
-        "epsilonDecaySteps": 12000,
-        "batchSize": 32,
-        "replaySize": 5000,
-        "trainEvery": 4,
-        "targetSyncSteps": 250,
+        "epsilonEnd": 0.03,
+        "epsilonDecaySteps": 60000,
+        "batchSize": 128,
+        "replaySize": 20000,
+        "learnStart": 2000,
+        "targetSyncSteps": 1500,
+        "hidden": 128,
+        "parallelInstances": 16,
     },
     "fields": [
-        {"key": "learningRate", "label": "Learning rate", "min": 0.0001, "max": 0.01, "step": 0.0001},
+        {"key": "learningRate", "label": "Learning rate", "min": 0.00005, "max": 0.005, "step": 0.00005},
         {"key": "discount", "label": "Discount γ", "min": 0.8, "max": 0.999, "step": 0.001},
         {"key": "epsilonStart", "label": "Initial exploration ε", "min": 0.1, "max": 1.0, "step": 0.01},
         {"key": "epsilonEnd", "label": "Final exploration ε", "min": 0.01, "max": 0.4, "step": 0.01},
-        {"key": "epsilonDecaySteps", "label": "Exploration decay steps", "min": 500, "max": 100000, "step": 500, "integer": True},
-        {"key": "batchSize", "label": "Replay batch size", "min": 8, "max": 128, "step": 8, "integer": True},
-        {"key": "replaySize", "label": "Replay capacity", "min": 500, "max": 20000, "step": 500, "integer": True},
-        {"key": "trainEvery", "label": "Train every N steps", "min": 1, "max": 16, "step": 1, "integer": True},
-        {"key": "targetSyncSteps", "label": "Target sync interval", "min": 50, "max": 2000, "step": 50, "integer": True},
+        {"key": "epsilonDecaySteps", "label": "Exploration decay steps", "min": 1000, "max": 500000, "step": 1000, "integer": True},
+        {"key": "batchSize", "label": "Replay batch size", "min": 32, "max": 512, "step": 32, "integer": True},
+        {"key": "replaySize", "label": "Replay capacity", "min": 2000, "max": 60000, "step": 1000, "integer": True},
+        {"key": "learnStart", "label": "Steps before learning", "min": 500, "max": 20000, "step": 500, "integer": True},
+        {"key": "targetSyncSteps", "label": "Target sync interval (steps)", "min": 100, "max": 10000, "step": 100, "integer": True},
+        {"key": "hidden", "label": "Hidden units", "min": 32, "max": 512, "step": 32, "integer": True},
+        {"key": "parallelInstances", "label": "Parallel environments", "min": 1, "max": 64, "step": 1, "integer": True},
     ],
 }
 
-HIDDEN = 32
 ACTION_COUNT = len(ACTIONS)
 
 
-class ParamTensor:
-    """Stores tensor weights alongside first and second moment vectors for Adam."""
-
-    def __init__(self, length: int, random_fn=None, scale: float = 0.0):
-        if random_fn and scale > 0:
-            self.data = [(random_fn() * 2.0 - 1.0) * scale for _ in range(length)]
-        else:
-            self.data = [0.0] * length
-        self.m = [0.0] * length
-        self.v = [0.0] * length
-
-
 class DQNAgent(BaseAgent):
-    """Neural Q-learning agent with replay memory and Adam optimizer."""
+    """Double DQN with a two-hidden-layer ReLU network."""
 
     def __init__(self, config: Optional[Dict[str, Any]] = None, checkpoint: Optional[Dict[str, Any]] = None):
         self.id = METADATA["id"]
         self.h = {**METADATA["defaults"], **(config or {})}
+        self.rng = np.random.default_rng(int(self.h.get("seed", 421)))
+        hidden = int(self.h["hidden"])
 
-        raw_seed = checkpoint.get("randomState") if checkpoint else self.h.get("seed", 421)
-        self.random_state = int(raw_seed) & 0xFFFFFFFF
-
-        if checkpoint and "params" in checkpoint:
-            self.params: List[ParamTensor] = []
-            for p in checkpoint["params"]:
-                tensor = ParamTensor(len(p["data"]))
-                tensor.data = [float(x) for x in p["data"]]
-                tensor.m = [float(x) for x in p.get("m", [0.0] * len(p["data"]))]
-                tensor.v = [float(x) for x in p.get("v", [0.0] * len(p["data"]))]
-                self.params.append(tensor)
+        loaded = checkpoint.get("params") if checkpoint else None
+        if loaded and "W1" in loaded and "W3" in loaded and np.asarray(loaded["W1"]).shape == (OBSERVATION_SIZE, hidden):
+            self.params = {k: np.asarray(v, dtype=np.float32) for k, v in loaded.items()}
         else:
-            self.params = [
-                ParamTensor(HIDDEN * OBSERVATION_SIZE, self._random, 0.12),
-                ParamTensor(HIDDEN, self._random, 0.0),
-                ParamTensor(ACTION_COUNT * HIDDEN, self._random, 0.12),
-                ParamTensor(ACTION_COUNT, self._random, 0.0),
-            ]
+            self.params = {
+                "W1": orthogonal(self.rng, OBSERVATION_SIZE, hidden, math.sqrt(2)),
+                "b1": np.zeros(hidden, dtype=np.float32),
+                "W2": orthogonal(self.rng, hidden, hidden, math.sqrt(2)),
+                "b2": np.zeros(hidden, dtype=np.float32),
+                "W3": orthogonal(self.rng, hidden, ACTION_COUNT, 1.0),
+                "b3": np.zeros(ACTION_COUNT, dtype=np.float32),
+            }
+        self.target = {k: v.copy() for k, v in self.params.items()}
+        self.opt = Adam(self.params, lr=float(self.h["learningRate"]), max_grad_norm=10.0)
 
-        # Target network weights
-        self.target_params = [list(p.data) for p in self.params]
-        self.replay: List[Dict[str, Any]] = list(checkpoint.get("replay", [])) if checkpoint else []
+        cap = int(self.h["replaySize"])
+        self.cap = cap
+        self.r_obs = np.zeros((cap, OBSERVATION_SIZE), dtype=np.float16)
+        self.r_next = np.zeros((cap, OBSERVATION_SIZE), dtype=np.float16)
+        self.r_act = np.zeros(cap, dtype=np.int64)
+        self.r_rew = np.zeros(cap, dtype=np.float32)
+        self.r_done = np.zeros(cap, dtype=np.float32)
+        self.size = 0
+        self.ptr = 0
         self.steps = int(checkpoint.get("steps", 0)) if checkpoint else 0
         self.updates = int(checkpoint.get("updates", 0)) if checkpoint else 0
-        self.last_target_sync = int(checkpoint.get("lastTargetSync", 0)) if checkpoint else 0
-        self.beta1_power = 1.0
-        self.beta2_power = 1.0
+        self.last_sync = self.steps
+        self.last_stats: Dict[str, float] = {}
 
-    def _random(self) -> float:
-        self.random_state = (1664525 * self.random_state + 1013904223) & 0xFFFFFFFF
-        return self.random_state / 0x100000000
+    def _q(self, x: np.ndarray, p: Dict[str, np.ndarray], keep: bool = False):
+        z1 = x @ p["W1"] + p["b1"]
+        a1 = np.maximum(z1, 0)
+        z2 = a1 @ p["W2"] + p["b2"]
+        a2 = np.maximum(z2, 0)
+        q = a2 @ p["W3"] + p["b3"]
+        return (q, a1, a2) if keep else q
 
-    def _forward(self, obs: List[float], weights: Optional[List[Any]] = None) -> Tuple[List[float], List[float], List[float]]:
-        """Compute feedforward activation values: (q_values, pre_activation, hidden)."""
-        w1, b1, w2, b2 = weights if weights is not None else self.params
-        w1_data = w1.data if hasattr(w1, "data") else w1
-        b1_data = b1.data if hasattr(b1, "data") else b1
-        w2_data = w2.data if hasattr(w2, "data") else w2
-        b2_data = b2.data if hasattr(b2, "data") else b2
+    def epsilon(self) -> float:
+        start, end = float(self.h["epsilonStart"]), float(self.h["epsilonEnd"])
+        return end + (start - end) * max(0.0, 1.0 - self.steps / float(self.h["epsilonDecaySteps"]))
 
-        pre = [0.0] * HIDDEN
-        hidden = [0.0] * HIDDEN
-        for j in range(HIDDEN):
-            val = b1_data[j]
-            offset = j * OBSERVATION_SIZE
-            for k in range(OBSERVATION_SIZE):
-                obs_k = obs[k] if k < len(obs) else 0.0
-                val += w1_data[offset + k] * obs_k
-            pre[j] = val
-            hidden[j] = max(0.0, val)
+    def act_batch(self, observations: np.ndarray, explore: bool = True, masks: np.ndarray | None = None) -> Tuple[np.ndarray, Dict[str, Any]]:
+        obs = np.asarray(observations, dtype=np.float32)
+        q = self._q(obs, self.params)
+        if masks is None:
+            masks = np.ones((len(obs), ACTION_COUNT), dtype=bool)
+        masks = np.asarray(masks, dtype=bool)
+        actions = np.where(masks, q, -1e9).argmax(axis=1)
+        if explore:
+            eps = self.epsilon()
+            random_mask = self.rng.random(len(obs)) < eps
+            weights = masks.astype(np.float64)
+            weights /= weights.sum(axis=1, keepdims=True)
+            sampled = np.minimum((weights.cumsum(axis=1) < self.rng.random(len(obs))[:, None]).sum(axis=1), ACTION_COUNT - 1)
+            actions = np.where(random_mask, sampled, actions)
+        return actions, {"prob": np.full(len(obs), 1.0)}
 
-        q = [0.0] * ACTION_COUNT
-        for a in range(ACTION_COUNT):
-            val = b2_data[a]
-            offset = a * HIDDEN
-            for j in range(HIDDEN):
-                val += w2_data[offset + j] * hidden[j]
-            q[a] = val
+    def observe_batch(self, obs, actions, extras, rewards, next_obs, terminated, truncated) -> None:
+        for i in range(len(obs)):
+            j = self.ptr
+            self.r_obs[j] = obs[i]
+            self.r_next[j] = next_obs[i]
+            self.r_act[j] = actions[i]
+            self.r_rew[j] = rewards[i]
+            self.r_done[j] = 1.0 if terminated[i] else 0.0
+            self.ptr = (self.ptr + 1) % self.cap
+            self.size = min(self.size + 1, self.cap)
+        self.steps += len(obs)
+        if self.steps - self.last_sync >= int(self.h["targetSyncSteps"]):
+            self.target = {k: v.copy() for k, v in self.params.items()}
+            self.last_sync = self.steps
 
-        return q, pre, hidden
+    def maybe_learn(self, current_obs: np.ndarray) -> Dict[str, float] | None:
+        batch = int(self.h["batchSize"])
+        if self.size < max(batch, int(self.h["learnStart"])):
+            return None
+        idx = self.rng.integers(0, self.size, batch)
+        x = self.r_obs[idx].astype(np.float32)
+        nx = self.r_next[idx].astype(np.float32)
+        a = self.r_act[idx]
+        r = self.r_rew[idx]
+        d = self.r_done[idx]
+        gamma = float(self.h["discount"])
 
-    def _learn_batch(self) -> None:
-        """Sample a batch from experience replay and perform an Adam gradient update."""
-        batch_size = int(self.h["batchSize"])
-        if len(self.replay) < batch_size:
-            return
+        # Double DQN target
+        best = self._q(nx, self.params).argmax(axis=1)
+        q_next = self._q(nx, self.target)[np.arange(batch), best]
+        y = r + gamma * (1.0 - d) * q_next
 
-        grads = [[0.0] * len(p.data) for p in self.params]
-
-        for _ in range(batch_size):
-            idx = math.floor(self._random() * len(self.replay))
-            t = self.replay[idx]
-
-            q_cur, pre, hidden = self._forward(t["obs"])
-            q_next, _, _ = self._forward(t["nextObs"], self.target_params)
-
-            target = t["reward"] + (0.0 if t["done"] else self.h["discount"] * max(q_next))
-            error = q_cur[t["action"]] - target
-
-            # Huber gradient
-            grad_out = [0.0] * ACTION_COUNT
-            grad_out[t["action"]] = max(-1.0, min(1.0, error))
-
-            # Gradients for layer 2
-            for a in range(ACTION_COUNT):
-                grads[3][a] += grad_out[a]
-                offset = a * HIDDEN
-                for j in range(HIDDEN):
-                    grads[2][offset + j] += grad_out[a] * hidden[j]
-
-            # Gradients for layer 1
-            w2_data = self.params[2].data
-            for j in range(HIDDEN):
-                grad_hidden = sum(w2_data[a * HIDDEN + j] * grad_out[a] for a in range(ACTION_COUNT))
-                if pre[j] <= 0:
-                    continue
-                grads[1][j] += grad_hidden
-                offset = j * OBSERVATION_SIZE
-                for k in range(OBSERVATION_SIZE):
-                    obs_k = t["obs"][k] if k < len(t["obs"]) else 0.0
-                    grads[0][offset + k] += grad_hidden * obs_k
-
+        q, a1, a2 = self._q(x, self.params, keep=True)
+        err = q[np.arange(batch), a] - y
+        dq = np.zeros_like(q)
+        dq[np.arange(batch), a] = np.clip(err, -1.0, 1.0) / batch  # Huber gradient
+        p = self.params
+        g = {"W3": a2.T @ dq, "b3": dq.sum(axis=0)}
+        da2 = (dq @ p["W3"].T) * (a2 > 0)
+        g["W2"] = a1.T @ da2
+        g["b2"] = da2.sum(axis=0)
+        da1 = (da2 @ p["W2"].T) * (a1 > 0)
+        g["W1"] = x.T @ da1
+        g["b1"] = da1.sum(axis=0)
+        self.opt.step({k: v.astype(np.float32) for k, v in g.items()})
         self.updates += 1
-        self.beta1_power *= 0.9
-        self.beta2_power *= 0.999
-        lr = float(self.h["learningRate"])
-
-        for p_idx, param in enumerate(self.params):
-            g_vec = grads[p_idx]
-            for i in range(len(param.data)):
-                g = g_vec[i] / batch_size
-                param.m[i] = 0.9 * param.m[i] + 0.1 * g
-                param.v[i] = 0.999 * param.v[i] + 0.001 * g * g
-                m_hat = param.m[i] / (1.0 - self.beta1_power)
-                v_hat = param.v[i] / (1.0 - self.beta2_power)
-                param.data[i] -= lr * m_hat / (math.sqrt(v_hat) + 1e-8)
-
-    def act(self, observation: List[float], state_key: str, explore: bool = True) -> Dict[str, Any]:
-        decay_steps = float(self.h["epsilonDecaySteps"])
-        eps_start = float(self.h["epsilonStart"])
-        eps_end = float(self.h["epsilonEnd"])
-        epsilon = eps_end + (eps_start - eps_end) * max(0.0, 1.0 - self.steps / decay_steps)
-
-        if explore and self._random() < epsilon:
-            action = math.floor(self._random() * ACTION_COUNT)
-            prob = epsilon / ACTION_COUNT
-        else:
-            q, _, _ = self._forward(observation)
-            best_q = max(q)
-            tied = [a for a, val in enumerate(q) if abs(val - best_q) < 1e-9]
-            action = tied[math.floor(self._random() * len(tied))]
-            prob = 1.0 - epsilon + (epsilon / ACTION_COUNT)
-
-        return {"action": action, "probability": prob}
-
-    def observe(self, transition: Dict[str, Any]) -> None:
-        self.replay.append({
-            "obs": list(transition["observation"]),
-            "action": int(transition["action"]),
-            "reward": float(transition["reward"]),
-            "nextObs": list(transition["nextObservation"]),
-            "done": bool(transition["done"]),
-        })
-
-        if len(self.replay) > int(self.h["replaySize"]):
-            self.replay.pop(0)
-
-        self.steps += 1
-        if self.steps - self.last_target_sync >= int(self.h["targetSyncSteps"]):
-            self.target_params = [list(p.data) for p in self.params]
-            self.last_target_sync = self.steps
-
-        if self.steps % int(self.h["trainEvery"]) == 0:
-            self._learn_batch()
-
-    def end_episode(self) -> None:
-        pass
+        self.last_stats = {"loss": float(np.mean(np.where(np.abs(err) < 1, 0.5 * err ** 2, np.abs(err) - 0.5))), "epsilon": self.epsilon()}
+        return self.last_stats
 
     def serialize(self) -> Dict[str, Any]:
         return {
-            "params": [{"data": list(p.data), "m": list(p.m), "v": list(p.v)} for p in self.params],
+            "params": {k: v.tolist() for k, v in self.params.items()},
             "steps": self.steps,
             "updates": self.updates,
-            "lastTargetSync": self.last_target_sync,
-            "randomState": self.random_state,
-            "replay": self.replay[-500:],
         }
 
     @property
@@ -233,4 +174,3 @@ class DQNAgent(BaseAgent):
 def create_agent(config: Optional[Dict[str, Any]] = None, checkpoint: Optional[Dict[str, Any]] = None) -> DQNAgent:
     """Factory creating a DQNAgent."""
     return DQNAgent(config, checkpoint)
-

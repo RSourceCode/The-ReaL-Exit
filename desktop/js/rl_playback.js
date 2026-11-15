@@ -21,6 +21,10 @@ export class RLPlaybackController {
     this.playbackState = null;
     this.isRequestPending = false;
     this.onFinished = null;
+    // Simulated clock (seconds) that drives the rotating bars. The Python environment is the
+    // source of truth for bar angles, so the 3D scene follows its clock instead of the wall
+    // clock – otherwise the agent would dodge bars that are not where the picture shows them.
+    this.simTime = 0;
   }
 
   async start(levels, seed = 431, rewards = null) {
@@ -29,7 +33,10 @@ export class RLPlaybackController {
       const startRes = await this.client.startPlayback(levels, seed, rewards);
       this.isActive = true;
       this.isRequestPending = false;
+      this.simTime = startRes.simTime ?? 0;
       this.playbackState = {
+        simFrom: this.simTime,
+        simTo: this.simTime,
         elapsed: 0,
         duration: RL_ACTION_DURATION_SECONDS,
         turnDuration: 0.63,
@@ -71,6 +78,9 @@ export class RLPlaybackController {
 
         const { action, previousPosition, position, heading, levelIndex, deathCount, result } = stepRes;
         $('deathCount').textContent = deathCount;
+        pb.simFrom = stepRes.simTimeBefore ?? this.simTime;
+        pb.simTo = stepRes.simTimeAfter ?? pb.simFrom;
+        this.simTime = pb.simTo;
 
         if (result.death) {
           pb.elapsed = 0;
@@ -122,6 +132,7 @@ export class RLPlaybackController {
     }
 
     const amount = Math.min(1, pb.elapsed / pb.duration);
+    this.simTime = THREE.MathUtils.lerp(pb.simFrom, pb.simTo, amount);
     const turnAmount = Math.min(1, pb.elapsed / pb.turnDuration);
     const smoothTurn = turnAmount * turnAmount * (3 - 2 * turnAmount);
 
