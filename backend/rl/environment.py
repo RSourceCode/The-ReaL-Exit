@@ -3,6 +3,20 @@
 Simulates movement, grid collisions, hazards, rotators, movers, pressure plates, doors
 and coins using the same level specifications as the 3D runtime and the editor.
 
+Skyway update (mirrors ``desktop/js``):
+
+* **Heights.**  Ledges / low walls (``platforms``) and lifts have a top surface.  Deeba can *walk*
+  onto a cell at most ``STEP_MAX`` higher than where she stands and *jump* onto one at most
+  ``JUMP_REACH`` higher; she can always drop down.  Plates, coins and boosts can sit on top of ledges.
+* **Lifts.**  ``lifts`` rest flush with the floor until the power lever is pulled, then rise and
+  fall on a fixed schedule (``lift_top``).  A tall tower is only reachable from a raised lift.
+* **CatLab hazards.**  ``lasers`` sweep along any axis (x, y or z) and extend along any axis; ``shocks`` strike
+  from one direction for a configurable length on a charge / strike cycle; ``cutters`` glide along a rail;
+  ``spikes`` pop out of the floor; ``hazards`` is acid and ``water`` is a harmless (slightly slow) wade.
+  Every dynamic hazard is a pure function of the world clock (see ``hazard_cells``), so it is part of the
+  time-resolved danger layers and the level solver stays exact.  ``w`` / ``d`` footprints (see
+  ``levels.expand_level``) stretch walls, ledges, acid, ice and water over several cells.
+
 What makes this environment *learnable* (compared with a raw 7x7 view):
 
 * ``observe()`` returns an egocentric 9x9 window with **time-resolved rotator danger**
@@ -18,11 +32,12 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
+from backend.levels import expand_level, migrate_level
 from backend.config import (
     ACTIONS,
     DANGER_HORIZON,
     DEFAULT_REWARDS,
-    LEVEL_TIME_LIMIT_STEPS,
+    LEVEL_TIME_LIMIT_SECONDS,
     LOCAL_VIEW_CHANNELS,
     LOCAL_VIEW_RADIUS,
     LOCAL_VIEW_SIZE,
@@ -51,6 +66,18 @@ def clamp(value: float, min_val: float, max_val: float) -> float:
 
 # Direction vectors indexed by heading (0=+Z, 1=+X, 2=-Z, 3=-X)
 _DIRS = [(0, 1), (1, 0), (0, -1), (-1, 0)]
+# Skyway constants – keep identical to desktop/js/constants.js
+LIFT_OMEGA = 1.1            # rad/s of a lift's up/down cycle
+LIFT_REST = 0.04            # top surface of a resting lift (flush with the floor)
+LIFT_DEFAULT_HEIGHT = 1.2
+LASER_OMEGA = 0.9           # rad/s of a moving laser's sweep
+PLATFORM_DEFAULT_HEIGHT = 1.0
+PLATFORM_TOP_PAD = 0.12     # platform top = height + pad (matches the 3D collider)
+WALL_TOP_PAD = 0.09
+CLIMBABLE_WALL_HEIGHT = 1.25  # inner walls up to this height count as low walls (ledges)
+STEP_MAX = 0.3              # highest step that can simply be walked up
+JUMP_REACH = 1.5            # highest surface a standing jump can reach
+MAX_HEIGHT = 2.4            # observation normaliser
 ROTATOR_HALF_LENGTH = 1.04
 ROTATOR_HALF_THICKNESS = 0.16
 PLAYER_CENTER_Y = 0.42
@@ -58,12 +85,31 @@ PLAYER_HALF = 0.37
 _LIMIT_X = ROTATOR_HALF_LENGTH + PLAYER_HALF
 _LIMIT_Z = ROTATOR_HALF_THICKNESS + PLAYER_HALF
 JUMP_COST = 4.0
+CLIMB_COST = 3.0
+PLAYER_HEIGHT = 1.0          # capsule height (feet -> head)
+BEAM_BELOW = 0.15           # a beam this far under the feet still clips Deeba's boots
+SHOCK_DIRS = ("down", "up", "xp", "xn", "zp", "zn")
+SHOCK_STAGGER = 0.9         # seconds of phase offset per shock index
+SHOCK_STRIKE_AT = 0.7       # cycle fraction where the strike starts (0.45..0.7 is the visible charge-up)
+CUTTER_OMEGA = 1.3
+CUTTER_REACH_PAD = 0.3
+CUTTER_HEIGHT_FACTOR = 1.8  # blade is 2r tall; a jump clears 1.8r
+SPIKE_STAGGER = 0.7
+SPIKE_UP_FRACTION = 0.55
+SPIKE_SAFE_HEIGHT = 0.45
+LASER_SAFE_HEIGHT = 0.9     # standing this high above the floor is clear of a laser beam
 INF = 1.0e9
 PAD = LOCAL_VIEW_RADIUS
 
 # Static channel indices
-CH_WALL, CH_BLOCK, CH_HAZARD, CH_MOVER, CH_PLATFORM, CH_COIN, CH_PLATE, CH_DOOR_CLOSED, CH_DOOR_OPEN, CH_SWITCH = range(10)
-assert STATIC_CHANNELS == 10
+(CH_WALL, CH_BLOCK, CH_HAZARD, CH_MOVER, CH_PLATFORM, CH_COIN, CH_PLATE, CH_DOOR_CLOSED, CH_DOOR_OPEN,
+ CH_SWITCH, CH_HEIGHT, CH_HEIGHT_NEXT, CH_RAIL) = range(13)
+assert STATIC_CHANNELS == 13
+
+
+def _round_cell(value: float) -> int:
+    """Round a continuous grid coordinate to the cell the 3D scene would show it in."""
+    return int(math.floor(value + 0.5))
 
 
 def _build_offsets():
@@ -118,16 +164,33 @@ class WorldEnvironment:
         # Level state
         self.level: Dict[str, Any] = {}
         self.level_steps = 0.0
+        self.time_limit_steps = 1
         self.size = 13
         self.position = [0, 0]
         self.heading = 0
         self.walls: Set[Cell] = set()
         self.blocks: Set[Cell] = set()
+        self.block_cells: List[Cell] = []
         self.hazards: Set[Cell] = set()
+        self.water: Set[Cell] = set()
+        self.lasers: List[Tuple[int, int, str, float, float, str, float, float]] = []
+        self.shocks: List[Tuple[int, int, str, float, float, float]] = []
+        self.cutters: List[Tuple[int, int, str, float, float, float]] = []
+        self.spikes: List[Tuple[int, int, float]] = []
+        self._hazard_cache: Dict[Any, Dict[Cell, List[str]]] = {}
+        self.ice: Set[Cell] = set()
+        self.ice_momentum: Optional[Cell] = None
+        self.powerups: List[Tuple[int, int, str]] = []
+        self.powerup_mask = 0
+        self.powerup_type: Optional[str] = None
+        self.powerup_until = 0.0
+        self.levers: Set[Cell] = set()
+        self.lever_on = False
         self.rotator_cells: List[List[int]] = []
         self.rotators: Set[Cell] = set()
         self.movers: Set[Cell] = set()
         self.plates: List[List[int]] = []
+        self.continuous_plates: Set[Cell] = set()
         self.plate_mask = 0
         self.coins: List[List[int]] = []
         self.coin_mask = 0
@@ -139,8 +202,15 @@ class WorldEnvironment:
         self.doors_open = False
         self.stairs: Set[Cell] = set()
         self.platforms: Set[Cell] = set()
+        # Skyway state
+        self.static_height: Dict[Cell, float] = {}       # ledges + climbable walls -> top surface
+        self.lifts: List[Tuple[int, int, float]] = []    # (x, z, max top)
+        self.lift_index: Dict[Cell, int] = {}
+        self.climbed: Set[Cell] = set()
+        self.lever_rewarded = False
 
         self._coin_key_to_idx: Dict[Cell, int] = {}
+        self._powerup_key_to_idx: Dict[Cell, int] = {}
         self._plate_key_to_idx: Dict[Cell, int] = {}
 
         # Rotator constants (numpy) – rebuilt per level
@@ -155,6 +225,7 @@ class WorldEnvironment:
         self._dist_np = np.zeros((1, 1))
         self._targets: List[Cell] = []
         self._plates_remaining = 0
+        self._lever_needed = False
         self._obs = np.zeros(OBSERVATION_SIZE, dtype=np.float32)
 
         self.reset()
@@ -186,8 +257,13 @@ class WorldEnvironment:
 
     def _load_level(self, level: Dict[str, Any]) -> None:
         """Load and parse level geometry, hazards, and interactive targets."""
+        level = migrate_level(level)
         self.level = level
+        raw_level, level = level, expand_level(level)
+        self.level = raw_level
+        self._hazard_cache = {}
         self.level_steps = 0.0
+        self.time_limit_steps = math.ceil(float(level.get("timeLimit", LEVEL_TIME_LIMIT_SECONDS)) / RL_ACTION_DURATION_SECONDS)
         self.size = int(level.get("size", 13))
         start_cell = level.get("start") or [self.size // 2, 1]
         self.position = [int(start_cell[0]), int(start_cell[1])]
@@ -195,26 +271,43 @@ class WorldEnvironment:
 
         self.walls = {(int(c[0]), int(c[1])) for c in level.get("walls", [])}
         self.blocks = {(int(c[0]), int(c[1])) for c in level.get("blocks", [])}
+        self.block_cells = [(int(c[0]), int(c[1])) for c in level.get("blocks", [])]
         self.hazards = {(int(c[0]), int(c[1])) for c in level.get("hazards", [])}
+        self.water = {(int(c[0]), int(c[1])) for c in level.get("water", [])}
+        self.ice = {(int(c[0]), int(c[1])) for c in level.get("ice", [])}
+        self.ice_momentum = None
+        self.powerups = [(int(c[0]), int(c[1]), str(c[2]) if len(c) > 2 else "speed") for c in level.get("powerups", [])[:MAX_TRACKED]]
+        self.powerup_mask = 0
+        self.powerup_type = None
+        self.powerup_until = 0.0
         self.rotator_cells = [[int(c[0]), int(c[1])] for c in level.get("rotators", [])]
         self.rotators = {(c[0], c[1]) for c in self.rotator_cells}
         self.movers = {(int(c[0]), int(c[1])) for c in level.get("movers", [])}
         self.plates = [[int(c[0]), int(c[1])] for c in level.get("plates", [])[:MAX_TRACKED]]
+        self.continuous_plates = {(int(c[0]), int(c[1])) for c in level.get("continuousPlates", [])}
         self.plate_mask = 0
         self.coins = [[int(c[0]), int(c[1])] for c in level.get("coins", [])[:MAX_TRACKED]]
         self.coin_mask = 0
         self.switches = [[int(c[0]), int(c[1])] for c in level.get("switches", [])]
-        self._switch_keys = {(s[0], s[1]) for s in self.switches}
+        self.levers = {(int(c[0]), int(c[1])) for c in level.get("levers", [])}
+        self._switch_keys = {(s[0], s[1]) for s in self.switches} | self.levers
         self.switch_on = False
+        self.lever_on = False
+        self.lever_rewarded = False
+        self.climbed = set()
 
         door = level.get("exitDoor") or level.get("goal") or [self.size // 2, self.size - 1]
         self.exit_door = [int(door[0]), int(door[1])]
         self._exit_door_key = (self.exit_door[0], self.exit_door[1])
-        self.doors_open = len(self.plates) == 0
+        self.doors_open = True  # recomputed in _load_channels
         self.stairs = {(int(c[0]), int(c[1])) for c in level.get("stairs", [])}
         self.platforms = {(int(c[0]), int(c[1])) for c in level.get("platforms", [])}
 
+        self._load_skyway(level)
+        self._load_channels(level)
+
         self._coin_key_to_idx = {(c[0], c[1]): i for i, c in enumerate(self.coins)}
+        self._powerup_key_to_idx = {(p[0], p[1]): i for i, p in enumerate(self.powerups)}
         self._plate_key_to_idx = {(p[0], p[1]): i for i, p in enumerate(self.plates)}
 
         # Rotator constants
@@ -229,9 +322,298 @@ class WorldEnvironment:
         self._build_static()
         self._refresh_objective()
 
+    # ── Skyway: heights, lifts, moving lasers ──────────────────────────────────────────
+    def _load_skyway(self, level: Dict[str, Any]) -> None:
+        props = level.get("objectProperties") or {}
+        self.static_height = {}
+        for c in level.get("platforms", []):
+            cell = (int(c[0]), int(c[1]))
+            h = float((props.get(f"platform:{cell[0]}:{cell[1]}") or {}).get("height", PLATFORM_DEFAULT_HEIGHT))
+            self.static_height[cell] = h + PLATFORM_TOP_PAD
+        size = self.size
+        for cell in list(self.walls):
+            if cell[0] in (0, size - 1) or cell[1] in (0, size - 1):
+                continue  # the outer fence is never climbable
+            p = props.get(f"wall:{cell[0]}:{cell[1]}") or {}
+            h = float(p.get("height", 1.9))
+            if p.get("collision", True) is not False and h <= CLIMBABLE_WALL_HEIGHT:
+                self.static_height[cell] = h + WALL_TOP_PAD
+                self.walls.discard(cell)  # a low wall is a surface, not a barrier
+        self.platforms = set(self.static_height)
+        self.lifts = []
+        for c in level.get("lifts", []):
+            height = float(c[2]) if len(c) > 2 else LIFT_DEFAULT_HEIGHT
+            self.lifts.append((int(c[0]), int(c[1]), height))
+        self.lift_index = {(x, z): i for i, (x, z, _h) in enumerate(self.lifts)}
+        self.lasers = []
+        for c in level.get("lasers", []):
+            sweep = str(c[2]) if len(c) > 2 and str(c[2]) in ("x", "y", "z") else "z"
+            beam = str(c[5]) if len(c) > 5 and str(c[5]) in ("x", "y", "z") else ("x" if sweep != "x" else "z")
+            if beam == sweep:
+                beam = "x" if sweep != "x" else "z"
+            self.lasers.append((int(c[0]), int(c[1]), sweep, float(c[3]) if len(c) > 3 else 2.0,
+                                float(c[4]) if len(c) > 4 else 5.0, beam, float(c[6]) if len(c) > 6 else 0.5,
+                                float(c[7]) if len(c) > 7 else 1.0))
+        self.shocks = []
+        for c in level.get("shocks", []):
+            d = str(c[2]) if len(c) > 2 and str(c[2]) in SHOCK_DIRS else "down"
+            self.shocks.append((int(c[0]), int(c[1]), d, float(c[3]) if len(c) > 3 else 3.0,
+                                max(1.0, float(c[4])) if len(c) > 4 else 3.0,
+                                float(c[5]) if len(c) > 5 else (0.5 if d not in ("down", "up") else (3.0 if d == "down" else 0.0))))
+        self.cutters = []
+        for c in level.get("cutters", []):
+            self.cutters.append((int(c[0]), int(c[1]), "z" if len(c) > 2 and c[2] == "z" else "x",
+                                 float(c[3]) if len(c) > 3 else 2.0, float(c[4]) if len(c) > 4 else 0.5,
+                                 float(c[5]) if len(c) > 5 else 1.0))
+        self.spikes = [(int(c[0]), int(c[1]), float(c[2]) if len(c) > 2 else 0.0) for c in level.get("spikes", [])]
+
+    # ── Colour-coded wiring (mirrors desktop/js/constants.js CHANNELS) ───────────────────────────────
+    def _load_channels(self, level: Dict[str, Any]) -> None:
+        """Channel 0 = legacy (plates open the exit gate, levers power channel-0 lifts).  Channels 1-6: a pressed plate
+        or a pulled lever switches off every obstacle / powers every lift that carries the same channel."""
+        props = level.get("objectProperties") or {}
+
+        def ch(kind: str, x: int, z: int) -> int:
+            return max(0, min(6, int((props.get(f"{kind}:{x}:{z}") or {}).get("channel", 0) or 0)))
+
+        self.plate_ch = [ch("plate", p[0], p[1]) for p in self.plates]
+        self.lever_ch = {c: ch("lever", c[0], c[1]) for c in self.levers}
+        self.lever_state = {c: False for c in self.levers}
+        self.lift_ch = [ch("lift", int(c[0]), int(c[1])) for c in level.get("lifts", [])][:len(self.lifts)]
+        self.lift_ch += [0] * (len(self.lifts) - len(self.lift_ch))
+        self.laser_ch = [ch("laser", int(c[0]), int(c[1])) for c in level.get("lasers", [])]
+        self.shock_ch = [ch("shock", int(c[0]), int(c[1])) for c in level.get("shocks", [])]
+        self.cutter_ch = [ch("cutter", int(c[0]), int(c[1])) for c in level.get("cutters", [])]
+        self.spike_ch = [ch("spikes", int(c[0]), int(c[1])) for c in level.get("spikes", [])]
+        self.door_plate_mask = sum(1 << i for i, c in enumerate(self.plate_ch) if c == 0)
+        self.channels_on: Set[int] = set()
+        self._ch_sig = 0
+        self.lever_on = False
+        self.doors_open = self.door_plate_mask == 0
+
+    def _recompute_channels(self) -> None:
+        on: Set[int] = set()
+        for i, c in enumerate(self.plate_ch):
+            if c and (self.plate_mask & (1 << i)):
+                on.add(c)
+        for cell, c in self.lever_ch.items():
+            if c and self.lever_state.get(cell):
+                on.add(c)
+        self.channels_on = on
+        self._ch_sig = sum(1 << c for c in on)
+        self.lever_on = any(self.lever_state.get(cell) for cell, c in self.lever_ch.items() if c == 0)
+
+    def lift_powered(self, index: int) -> bool:
+        c = self.lift_ch[index] if index < len(self.lift_ch) else 0
+        return self.lever_on if c == 0 else c in self.channels_on
+
+    def _off(self, kind_list: List[int], i: int) -> bool:
+        return i < len(kind_list) and kind_list[i] in self.channels_on and kind_list[i] != 0
+
+    def lift_top(self, index: int, time_seconds: float) -> float:
+        """Top surface of lift ``index`` (rests flush until its lever is pulled)."""
+        if not self.lift_powered(index):
+            return LIFT_REST
+        high = self.lifts[index][2]
+        wave = 0.5 - 0.5 * math.cos(LIFT_OMEGA * time_seconds + 1.3 * index)
+        return LIFT_REST + (high - LIFT_REST) * wave
+
+    def cell_height(self, cell: Cell, time_seconds: float) -> float:
+        """Walkable surface height of a cell at ``time_seconds`` (0 for plain floor)."""
+        h = self.static_height.get(cell, 0.0)
+        i = self.lift_index.get(cell)
+        if i is not None:
+            h = max(h, self.lift_top(i, time_seconds))
+        return h
+
+    # ── CatLab hazards: pure functions of the world clock (mirrored in desktop/js/constants.js) ──────
+    def laser_offset(self, index: int, time_seconds: float) -> float:
+        """Signed sweep offset of laser ``index`` (cells, or world units when it sweeps along y)."""
+        c = self.lasers[index]
+        return c[3] * math.sin(LASER_OMEGA * c[7] * time_seconds + 1.9 * index)
+
+    def shock_phase(self, index: int, time_seconds: float) -> float:
+        """0..1 position inside shock ``index``'s cycle: idle < 0.45 <= charging < 0.7 <= striking."""
+        period = self.shocks[index][4]
+        return ((time_seconds + SHOCK_STAGGER * index) % period) / period
+
+    def cutter_position(self, index: int, time_seconds: float) -> Tuple[float, float]:
+        cx, cz, axis, rng, _r, speed = self.cutters[index]
+        off = rng * math.sin(CUTTER_OMEGA * speed * time_seconds + 1.1 * index)
+        return (cx + off, float(cz)) if axis == "x" else (float(cx), cz + off)
+
+    def spike_up(self, index: int, time_seconds: float) -> bool:
+        period = self.spikes[index][2]
+        return period <= 0 or ((time_seconds + SPIKE_STAGGER * index) % period) < SPIKE_UP_FRACTION * period
+
+    def _lasers_frozen(self, time_seconds: float) -> bool:
+        return self.powerup_type == "freeze" and self.powerup_until > time_seconds
+
+    def hazard_cells(self, time_seconds: float) -> Dict[Cell, List[str]]:
+        """Every cell that kills a *standing* Deeba at ``time_seconds`` -> hazard kind (feet height is applied by
+        :meth:`dynamic_hit`).  Cached per (time, lever) because lifts do not matter at this level."""
+        key = (round(time_seconds, 4), self._ch_sig)
+        hit = self._hazard_cache.get(key)
+        if hit is not None:
+            return hit
+        out: Dict[Cell, List[str]] = {}
+        size = self.size
+
+        def add(cell, kind):
+            if 0 <= cell[0] < size and 0 <= cell[1] < size and kind not in out.get(cell, ()):
+                out.setdefault(cell, []).append(kind)
+
+        for i, (cx, cz, sweep, _rng, half, beam, _y, _sp) in enumerate(self.lasers):
+            if self._off(self.laser_ch, i):
+                continue
+            off = self.laser_offset(i, time_seconds)
+            px, pz = (cx + off if sweep == "x" else cx), (cz + off if sweep == "z" else cz)
+            if beam == "x":
+                for x in range(math.ceil(px - half), math.floor(px + half) + 1):
+                    add((x, _round_cell(pz)), "laser")
+            elif beam == "z":
+                for z in range(math.ceil(pz - half), math.floor(pz + half) + 1):
+                    add((_round_cell(px), z), "laser")
+            else:
+                add((_round_cell(px), _round_cell(pz)), "laser")
+        for i, (x, z, d, length, _p, _y) in enumerate(self.shocks):
+            if self._off(self.shock_ch, i) or self.shock_phase(i, time_seconds) < SHOCK_STRIKE_AT:
+                continue
+            n = max(0, int(round(length)))
+            if d in ("down", "up"):
+                add((x, z), "shock")
+            else:
+                dx, dz = {"xp": (1, 0), "xn": (-1, 0), "zp": (0, 1), "zn": (0, -1)}[d]
+                for k in range(0, n + 1):
+                    add((x + dx * k, z + dz * k), "shock")
+        for i, (_x, _z, _a, _r, radius, _s) in enumerate(self.cutters):
+            if self._off(self.cutter_ch, i):
+                continue
+            px, pz = self.cutter_position(i, time_seconds)
+            reach = radius + CUTTER_REACH_PAD
+            for x in range(math.floor(px - reach), math.ceil(px + reach) + 1):
+                for z in range(math.floor(pz - reach), math.ceil(pz + reach) + 1):
+                    if (x - px) ** 2 + (z - pz) ** 2 <= reach * reach:
+                        add((x, z), "cutter")
+        for i, (x, z, _p) in enumerate(self.spikes):
+            if not self._off(self.spike_ch, i) and self.spike_up(i, time_seconds):
+                add((x, z), "spikes")
+        if len(self._hazard_cache) > 4096:
+            self._hazard_cache.clear()
+        self._hazard_cache[key] = out
+        return out
+
+    def _kind_lethal(self, kind: str, cell: Cell, feet: float, time_seconds: float) -> bool:
+        """Does hazard ``kind`` at ``cell`` hurt Deeba standing with her feet at ``feet``?"""
+        if kind == "spikes":
+            return feet < SPIKE_SAFE_HEIGHT
+        if kind == "cutter":
+            return any(not self._off(self.cutter_ch, i) and feet < CUTTER_HEIGHT_FACTOR * c[4] and
+                       (cell[0] - self.cutter_position(i, time_seconds)[0]) ** 2 + (cell[1] - self.cutter_position(i, time_seconds)[1]) ** 2
+                       <= (c[4] + CUTTER_REACH_PAD) ** 2 for i, c in enumerate(self.cutters))
+        if kind == "shock":
+            for i, (x, z, d, length, _p, y) in enumerate(self.shocks):
+                if self._off(self.shock_ch, i) or self.shock_phase(i, time_seconds) < SHOCK_STRIKE_AT:
+                    continue
+                if d == "down":
+                    ok = (x, z) == cell and feet < y and feet + PLAYER_HEIGHT > y - length
+                elif d == "up":
+                    ok = (x, z) == cell and feet + PLAYER_HEIGHT > y and feet < y + length
+                else:
+                    dx, dz = {"xp": (1, 0), "xn": (-1, 0), "zp": (0, 1), "zn": (0, -1)}[d]
+                    k = (cell[0] - x) * dx + (cell[1] - z) * dz
+                    ok = 0 <= k <= int(round(length)) and (cell[0] - x) * dz == 0 and (cell[1] - z) * dx == 0 \
+                        and feet - BEAM_BELOW <= y <= feet + PLAYER_HEIGHT
+                if ok:
+                    return True
+            return False
+        # laser
+        for i, (cx, cz, sweep, _rng, half, beam, y, _sp) in enumerate(self.lasers):
+            if self._off(self.laser_ch, i):
+                continue
+            off = self.laser_offset(i, time_seconds)
+            px, pz = (cx + off if sweep == "x" else cx), (cz + off if sweep == "z" else cz)
+            by = y + off if sweep == "y" else y
+            if beam == "x":
+                ok = abs(cell[0] - px) <= half + 1e-9 and cell[1] == _round_cell(pz)
+            elif beam == "z":
+                ok = abs(cell[1] - pz) <= half + 1e-9 and cell[0] == _round_cell(px)
+            else:
+                ok = (cell[0], cell[1]) == (_round_cell(px), _round_cell(pz))
+            if not ok:
+                continue
+            if beam == "y":
+                if feet <= y + 2 * half and feet + PLAYER_HEIGHT >= y:
+                    return True
+            elif feet - BEAM_BELOW <= by <= feet + PLAYER_HEIGHT:
+                return True
+        return False
+
+    def dynamic_hit(self, cell: Cell, time_seconds: float) -> Optional[str]:
+        """Kind of dynamic hazard that kills Deeba standing in ``cell`` (on its surface) at ``time_seconds``."""
+        if self._lasers_frozen(time_seconds):
+            return None
+        kinds = self.hazard_cells(time_seconds).get(cell)
+        if not kinds:
+            return None
+        feet = self.cell_height(cell, time_seconds)
+        for kind in kinds:
+            if self._kind_lethal(kind, cell, feet, time_seconds):
+                return kind
+        return None
+
+    def moving_laser_hits(self, cell: Cell, time_seconds: float) -> bool:
+        """Back-compat name: True if *any* dynamic hazard kills at ``cell``."""
+        return self.dynamic_hit(cell, time_seconds) is not None
+
+    def _climb_kind(self, from_h: float, to_h: float) -> int:
+        """0 = walk, 1 = needs a jump, 2 = unreachable (dropping is always fine)."""
+        diff = to_h - from_h
+        if diff <= STEP_MAX:
+            return 0
+        return 1 if diff <= JUMP_REACH else 2
+
     def get_state_key(self) -> str:
         """Compact state key (kept for API compatibility; the neural agents ignore it)."""
         return f"{self.level_index},{self.position[0]},{self.position[1]},{self.heading},{self.plate_mask},{self.coin_mask}"
+
+    def capture(self) -> Dict[str, Any]:
+        """Cheap copy of every *dynamic* field (used by the level solver and by tests)."""
+        return {
+            "level_index": self.level_index, "position": list(self.position), "heading": self.heading,
+            "blocks": set(self.blocks), "block_cells": list(self.block_cells),
+            "plate_mask": self.plate_mask, "coin_mask": self.coin_mask, "powerup_mask": self.powerup_mask,
+            "powerup_type": self.powerup_type, "powerup_until": self.powerup_until,
+            "lever_state": dict(self.lever_state), "switch_on": self.switch_on, "doors_open": self.doors_open,
+            "ice_momentum": self.ice_momentum, "simulation_steps": self.simulation_steps,
+            "level_steps": self.level_steps, "climbed": set(self.climbed), "lever_rewarded": self.lever_rewarded,
+            "episode_complete": self.episode_complete,
+        }
+
+    def restore(self, saved: Dict[str, Any]) -> None:
+        """Inverse of :meth:`capture` (the level itself must be the same)."""
+        self.level_index = saved["level_index"]
+        self.position = list(saved["position"])
+        self.heading = saved["heading"]
+        self.blocks = set(saved["blocks"])
+        self.block_cells = list(saved["block_cells"])
+        self.plate_mask = saved["plate_mask"]
+        self.coin_mask = saved["coin_mask"]
+        self.powerup_mask = saved["powerup_mask"]
+        self.powerup_type = saved["powerup_type"]
+        self.powerup_until = saved["powerup_until"]
+        self.lever_state = dict(saved["lever_state"])
+        self.switch_on = saved["switch_on"]
+        self.doors_open = saved["doors_open"]
+        self.ice_momentum = saved["ice_momentum"]
+        self.simulation_steps = saved["simulation_steps"]
+        self.level_steps = saved["level_steps"]
+        self.climbed = set(saved["climbed"])
+        self.lever_rewarded = saved["lever_rewarded"]
+        self.episode_complete = saved["episode_complete"]
+        self._recompute_channels()
+        self._sync_dynamic()
+        self._refresh_objective()
 
     def snapshot(self) -> Dict[str, Any]:
         """Capture a snapshot of the current environment state."""
@@ -267,10 +649,44 @@ class WorldEnvironment:
 
         mark(CH_WALL, self.walls)
         mark(CH_HAZARD, self.hazards)
+        mark(CH_HAZARD, self.water, 0.15)  # harmless wade, faint on purpose
         mark(CH_MOVER, self.movers)
         mark(CH_PLATFORM, self.platforms)
+        mark(CH_PLATFORM, self.ice, 0.4)
+        for cell, top in self.static_height.items():
+            mark(CH_HEIGHT, [cell], min(1.0, top / MAX_HEIGHT))
+        # Rails: every cell a dynamic hazard can ever cover (a faint hint of where to look; value = type).
+        for kind, value in (("laser", 0.4), ("shock", 0.6), ("cutter", 0.8), ("spikes", 1.0)):
+            mark(CH_RAIL, self._hazard_footprint(kind), value)
+        st[CH_HEIGHT_NEXT] = st[CH_HEIGHT]
         self._static = st
         self._sync_dynamic()
+
+    def _hazard_footprint(self, kind: str) -> Set[Cell]:
+        """Union of cells a hazard kind can ever occupy (sampled over one full period)."""
+        cells: Set[Cell] = set()
+        horizon = 24.0
+        step = 0.2
+        t = 0.0
+        saved_cache = self._hazard_cache
+        self._hazard_cache = {}
+        while t <= horizon:
+            if kind == "shock":
+                # strike cells regardless of phase: temporarily ignore the clock by forcing the strike window
+                for i, (x, z, d, length, period, _y) in enumerate(self.shocks):
+                    n = max(0, int(round(length)))
+                    if d in ("down", "up"):
+                        cells.add((x, z))
+                    else:
+                        dx, dz = {"xp": (1, 0), "xn": (-1, 0), "zp": (0, 1), "zn": (0, -1)}[d]
+                        cells.update((x + dx * k, z + dz * k) for k in range(n + 1))
+                break
+            for cell, kinds in self.hazard_cells(t).items():
+                if kind in kinds:
+                    cells.add(cell)
+            t += step
+        self._hazard_cache = saved_cache
+        return cells
 
     def _sync_dynamic(self) -> None:
         """Refresh channels that change during play (blocks, coins, plates, door, switch)."""
@@ -288,13 +704,29 @@ class WorldEnvironment:
         for i, c in enumerate(self.coins):
             if not (self.coin_mask & (1 << i)):
                 st[CH_COIN, c[0] + PAD, c[1] + PAD] = 1.0
+        for i, (px, pz, _kind) in enumerate(self.powerups):
+            if not (self.powerup_mask & (1 << i)):
+                st[CH_COIN, px + PAD, pz + PAD] = max(st[CH_COIN, px + PAD, pz + PAD], 0.65)
         for i, p in enumerate(self.plates):
             if not (self.plate_mask & (1 << i)):
                 st[CH_PLATE, p[0] + PAD, p[1] + PAD] = 1.0
         ex, ez = self.exit_door
         st[CH_DOOR_OPEN if self.doors_open else CH_DOOR_CLOSED, ex + PAD, ez + PAD] = 1.0
         for (sx, sz) in self._switch_keys:
-            st[CH_SWITCH, sx + PAD, sz + PAD] = 1.0 if self.switch_on else 0.5
+            st[CH_SWITCH, sx + PAD, sz + PAD] = 1.0 if (self.switch_on or (self.lever_state.get((sx, sz), False))) else 0.5
+        self._sync_lifts()
+
+    def _sync_lifts(self) -> None:
+        """Lift heights now and one look-ahead later (so a memoryless policy can see which way they move)."""
+        if not self.lifts:
+            return
+        st = self._static
+        now = self.sim_time_seconds
+        ahead = now + 2.0 * RL_ACTION_DURATION_SECONDS
+        for i, (lx, lz, _h) in enumerate(self.lifts):
+            base = self.static_height.get((lx, lz), 0.0)
+            st[CH_HEIGHT, lx + PAD, lz + PAD] = max(base, self.lift_top(i, now)) / MAX_HEIGHT
+            st[CH_HEIGHT_NEXT, lx + PAD, lz + PAD] = max(base, self.lift_top(i, ahead)) / MAX_HEIGHT
 
     # ── Shortest-path distance field (the "compass") ───────────────────────────────────
     def _standable(self, x: int, z: int) -> bool:
@@ -308,14 +740,16 @@ class WorldEnvironment:
             return False
         return True
 
-    def _refresh_objective(self) -> None:
-        """Recompute targets and the Dijkstra distance field to the nearest objective."""
-        targets = [(p[0], p[1]) for i, p in enumerate(self.plates) if not (self.plate_mask & (1 << i))]
-        self._plates_remaining = len(targets)
-        if not targets:
-            targets = [self._exit_door_key]
-        self._targets = targets
+    def _static_cell_height(self, cell: Cell, lever_assumed: bool) -> float:
+        """Height used by the (time-independent) distance field: lifts count as raised once powered."""
+        h = self.static_height.get(cell, 0.0)
+        i = self.lift_index.get(cell)
+        if i is not None:
+            h = max(h, self.lifts[i][2] if lever_assumed else LIFT_REST)
+        return h
 
+    def _field(self, targets: List[Cell], lever_assumed: bool) -> List[float]:
+        """Dijkstra distance (in action-ish units) from every cell to the nearest target."""
         size = self.size
         dist = [INF] * (size * size)
         heap: List[Tuple[float, int, int]] = []
@@ -326,21 +760,51 @@ class WorldEnvironment:
         heapq.heapify(heap)
         jumpables = self.hazards | self.rotators | self.movers
         standable = self._standable
+        height = lambda c: self._static_cell_height(c, lever_assumed)  # noqa: E731
         while heap:
             d, x, z = heapq.heappop(heap)
             if d > dist[x * size + z]:
                 continue
+            hx = height((x, z))
             for fx, fz in _DIRS:
                 nx, nz = x + fx, z + fz
-                if standable(nx, nz) and d + 1.0 < dist[nx * size + nz]:
-                    dist[nx * size + nz] = d + 1.0
-                    heapq.heappush(heap, (d + 1.0, nx, nz))
+                if standable(nx, nz):
+                    kind = self._climb_kind(height((nx, nz)), hx)
+                    if kind != 2:
+                        cost = d + (1.0 if kind == 0 else CLIMB_COST)
+                        if cost < dist[nx * size + nz]:
+                            dist[nx * size + nz] = cost
+                            heapq.heappush(heap, (cost, nx, nz))
                 # A jump launched from (x - 2f) over a hazard at (x - f) lands here.
                 if (x - fx, z - fz) in jumpables:
                     ax, az = x - 2 * fx, z - 2 * fz
-                    if standable(ax, az) and d + JUMP_COST < dist[ax * size + az]:
+                    if standable(ax, az) and self._climb_kind(height((ax, az)), hx) != 2 and d + JUMP_COST < dist[ax * size + az]:
                         dist[ax * size + az] = d + JUMP_COST
                         heapq.heappush(heap, (d + JUMP_COST, ax, az))
+        return dist
+
+    def _refresh_objective(self) -> None:
+        """Recompute targets and the distance field to the nearest objective (plate -> exit).
+
+        If the objective can only be reached with the lifts running (and the power lever is still off)
+        the lever itself becomes the objective, so the compass tells the agent to go and pull it.
+        """
+        targets = [(p[0], p[1]) for i, p in enumerate(self.plates) if self.plate_ch[i] == 0 and not (self.plate_mask & (1 << i))]
+        self._plates_remaining = len(targets)
+        if not targets:
+            targets = [self._exit_door_key]
+        size = self.size
+        self._lever_needed = False
+        if self.lifts and not all(self.lift_powered(i) for i in range(len(self.lifts))):
+            dist = self._field(targets, False)
+            here = self.position[0] * size + self.position[1]
+            if dist[here] >= INF and self.levers:
+                targets = sorted(self.levers)
+                dist = self._field(targets, False)
+                self._lever_needed = True
+        else:
+            dist = self._field(targets, bool(self.lifts))
+        self._targets = targets
         self._dist = dist
         self._dist_np = np.array(dist, dtype=np.float64).reshape(size, size)
 
@@ -352,6 +816,8 @@ class WorldEnvironment:
     # ── Rotating bars ──────────────────────────────────────────────────────────────────
     def _rotator_matrix(self, xs, zs, times, jump_heights) -> np.ndarray:
         """Overlap of player boxes (S points) against every rotating bar -> bool (S, R)."""
+        if self.powerup_type == "freeze" and self.powerup_until > float(np.max(times, initial=0.0)):
+            return np.zeros((len(xs), len(self.rotator_cells)), dtype=bool)
         xs = np.asarray(xs, dtype=np.float64)
         zs = np.asarray(zs, dtype=np.float64)
         angle = np.asarray(times, dtype=np.float64)[:, None] * self._rot_speed * self._rot_dir[None, :]
@@ -375,7 +841,8 @@ class WorldEnvironment:
             return self.rotator_cells[int(np.argmax(hit))]
         return None
 
-    def _rotator_collision_during_move(self, start: List[int], end: List[int], duration: float, jumping: bool = False) -> Optional[List[int]]:
+    def _rotator_collision_during_move(self, start: List[int], end: List[int], duration: float, jumping: bool = False,
+                                       base_start: float = 0.0, base_end: float = 0.0) -> Optional[List[int]]:
         """Sweep player movement and rotor rotation over the action duration."""
         if not self.rotator_cells:
             return None
@@ -393,10 +860,11 @@ class WorldEnvironment:
             heights = np.maximum(0.0, PLAYER_JUMP_IMPULSE * jt - 0.5 * WORLD_GRAVITY * jt * jt)
         else:
             heights = np.zeros(samples)
+        heights = heights + base_start + (base_end - base_start) * amounts  # standing on a ledge lifts Deeba over the bar
         hits = self._rotator_matrix(px, pz, times, heights)  # (S, R)
 
-        ends = self._rotator_matrix([end[0]], [end[1]], [start_time + duration], [0.0])[0]
-        starts = self._rotator_matrix([start[0]], [start[1]], [start_time], [0.0])[0]
+        ends = self._rotator_matrix([end[0]], [end[1]], [start_time + duration], [base_end])[0]
+        starts = self._rotator_matrix([start[0]], [start[1]], [start_time], [base_start])[0]
         any_hit = hits.any(axis=0)
         for index in range(len(self.rotator_cells)):
             if starts[index] and not ends[index] and not jumping:
@@ -410,21 +878,34 @@ class WorldEnvironment:
         """Bool (H, W, W): cell is swept by a bar during action k (k = 0 is the action about to be taken)."""
         horizon = DANGER_HORIZON
         out = np.zeros((horizon, LOCAL_VIEW_WIDTH, LOCAL_VIEW_WIDTH), dtype=np.float32)
-        if not self.rotator_cells:
-            return out
         half = RL_ACTION_DURATION_SECONDS / 2.0
         times = self.sim_time_seconds + np.arange(2 * horizon + 1) * half  # (T,)
-        angle = times[:, None] * self._rot_speed * self._rot_dir[None, :]  # (T, R)
-        cosine = np.cos(angle)[None, :, :]
-        sine = np.sin(angle)[None, :, :]
-        dx = (wx.reshape(-1, 1, 1) - self._rot_x[None, None, :])
-        dz = (wz.reshape(-1, 1, 1) - self._rot_z[None, None, :])
-        local_x = dx * cosine - dz * sine
-        local_z = dx * sine + dz * cosine
-        hit = ((np.abs(local_x) <= _LIMIT_X) & (np.abs(local_z) <= _LIMIT_Z)).any(axis=2)  # (N, T)
-        for k in range(horizon):
-            out[k] = hit[:, 2 * k:2 * k + 3].any(axis=1).reshape(LOCAL_VIEW_WIDTH, LOCAL_VIEW_WIDTH)
+        if self.rotator_cells and not (self.powerup_type == "freeze" and self.powerup_until > self.sim_time_seconds):
+            angle = times[:, None] * self._rot_speed * self._rot_dir[None, :]
+            cosine = np.cos(angle)[None, :, :]
+            sine = np.sin(angle)[None, :, :]
+            dx = wx.reshape(-1, 1, 1) - self._rot_x[None, None, :]
+            dz = wz.reshape(-1, 1, 1) - self._rot_z[None, None, :]
+            local_x = dx * cosine - dz * sine
+            local_z = dx * sine + dz * cosine
+            hit = ((np.abs(local_x) <= _LIMIT_X) & (np.abs(local_z) <= _LIMIT_Z)).any(axis=2)
+            for k in range(horizon):
+                danger = hit[:, 2 * k:2 * k + 3].any(axis=1).reshape(LOCAL_VIEW_WIDTH, LOCAL_VIEW_WIDTH)
+                out[k] = np.maximum(out[k], danger.astype(np.float32))
+        if not (self.powerup_type == "freeze" and self.powerup_until > self.sim_time_seconds):
+            if self.lasers or self.shocks or self.cutters or self.spikes:
+                window = list(zip(wx.reshape(-1).tolist(), wz.reshape(-1).tolist()))
+                for k in range(horizon):
+                    flat = out[k].reshape(-1)
+                    for tt in times[2 * k:2 * k + 3]:
+                        t = float(tt)
+                        for n, cell in enumerate(window):
+                            if flat[n] < 1.0 and self.dynamic_hit(cell, t) is not None:
+                                flat[n] = 1.0
         return out
+
+    def _dynamic_hazard_active(self, cell: Cell, time_seconds: float) -> bool:
+        return self.dynamic_hit(cell, time_seconds) is not None
 
     # ── Observation ────────────────────────────────────────────────────────────────────
     def observe(self) -> np.ndarray:
@@ -433,6 +914,7 @@ class WorldEnvironment:
         h = self.heading
         obs = self._obs
         width = LOCAL_VIEW_WIDTH
+        self._sync_lifts()
 
         wx = x + _DX[h]
         wz = z + _DZ[h]
@@ -464,40 +946,66 @@ class WorldEnvironment:
         s[7] = clamp((ddx * lx + ddz * lz) / self.size, -1.0, 1.0)
         s[8] = 1.0 if self._plates_remaining else 0.0
         s[9] = 0.0 if self._plates_remaining else 1.0
-        s[10] = clamp(1.0 - self.level_steps / LEVEL_TIME_LIMIT_STEPS, 0.0, 1.0)
+        s[10] = clamp(1.0 - self.level_steps / self.time_limit_steps, 0.0, 1.0)
         s[11] = 1.0 if self.doors_open else 0.0
         s[12] = self._plates_remaining / max(1, len(self.plates))
         s[13] = (len(self.coins) - bin(self.coin_mask).count("1")) / max(1, len(self.coins))
         even = int(self.simulation_steps) % 2 == 0
         s[14] = 1.0 if even else 0.0
         s[15] = 0.0 if even else 1.0
+        s[15] = max(s[15], clamp((self.powerup_until - self.sim_time_seconds) / 9.0, 0.0, 1.0))
+        s[16] = clamp(self.cell_height((x, z), self.sim_time_seconds) / MAX_HEIGHT, 0.0, 1.0)
+        s[17] = 1.0 if self.lever_on else 0.0
+        s[18] = 1.0 if self._lever_needed else 0.0
         return obs
 
     def action_mask(self) -> np.ndarray:
         """Boolean mask of *sensible* actions in the current state (invalid-action masking).
 
         Masks only actions that can never help: walking into walls, stepping on lava, walking
-        into a bar's hub, jumping with nothing to jump over, or pressing E with no switch ahead.
+        into a bar's hub, walking into a ledge that is too high to step onto, jumping with nothing
+        to jump over or onto, or pressing E with no lever / switch in reach.
         Everything that needs *judgement* (timing a bar, when to wait, when to jump) stays open.
         """
         mask = np.ones(len(ACTIONS), dtype=bool)
         x, z = self.position
+        now = self.sim_time_seconds
+        arrive = now + RL_ACTION_DURATION_SECONDS
+        here_h = self.cell_height((x, z), now)
         fx, fz = _DIRS[self.heading]
         directions = ((fx, fz), (-fx, -fz), (-fz, fx), (fz, -fx))
+        shielded = self.powerup_type == "shield" and self.powerup_until > now
         for slot, (dx, dz) in enumerate(directions):
             cell = (x + dx, z + dz)
             if cell in self.blocks:
                 beyond = (cell[0] + dx, cell[1] + dz)
                 if self._static_blocked(*beyond):
                     mask[slot] = False
-            elif self._static_blocked(*cell) or cell in self.hazards or cell in self.rotators:
+            elif (self._static_blocked(*cell) or (cell in self.hazards and not shielded) or cell in self.rotators
+                  or (self._dynamic_hazard_active(cell, now) and not shielded)
+                  or self._climb_kind(here_h, self.cell_height(cell, arrive)) != 0):
                 mask[slot] = False
         first = (x + fx, z + fz)
-        landing = (x + 2 * fx, z + 2 * fz)
-        mask[6] = (
+        powered_jump = self.powerup_type == "jump" and self.powerup_until > now
+        jump_distance = 3 if powered_jump else 2
+        landing = (x + jump_distance * fx, z + jump_distance * fz)
+        over_something = (
             first in self.hazards or first in self.rotators or first in self.movers
-        ) and not self._static_blocked(*landing) and landing not in self.hazards and landing not in self.movers
-        mask[7] = first in self._switch_keys
+            or self.moving_laser_hits(first, now)
+            or powered_jump
+        )
+        first_h = self.cell_height(first, arrive)
+        climb = (
+            not self._static_blocked(*first) and first not in self.hazards and first not in self.rotators
+            and self._climb_kind(here_h, first_h) == 1
+        )
+        hop_ok = (
+            over_something and not self._static_blocked(*landing) and landing not in self.hazards
+            and landing not in self.movers
+            and self._climb_kind(here_h, self.cell_height(landing, now + PLAYER_JUMP_DURATION_SECONDS)) != 2
+        )
+        mask[6] = bool(hop_ok or climb)
+        mask[7] = first in self._switch_keys or (x, z) in self._switch_keys
         return mask
 
     # ── Dynamics ───────────────────────────────────────────────────────────────────────
@@ -575,23 +1083,71 @@ class WorldEnvironment:
             if tuple(self.position) in self.rotators:
                 move = [0, 0]
             else:
+                now = self.sim_time_seconds
+                land_t = now + PLAYER_JUMP_DURATION_SECONDS
+                here_h = self.cell_height(tuple(self.position), now)
                 first_cell = (self.position[0] + fx, self.position[1] + fz)
-                landing = (self.position[0] + fx * 2, self.position[1] + fz * 2)
-                jumpable = first_cell in self.hazards or first_cell in self.rotators or first_cell in self.movers
+                jump_distance = 3 if self.powerup_type == "jump" and self.powerup_until > now else 2
+                landing = (self.position[0] + fx * jump_distance, self.position[1] + fz * jump_distance)
+                obstacle = (
+                    first_cell in (self.hazards | self.rotators | self.movers)
+                    or self.moving_laser_hits(first_cell, now)
+                )
+                jumpable = obstacle or jump_distance == 3
                 landing_is_hazard = landing in self.hazards or landing in self.movers
-                if jumpable and not self._blocked(landing[0], landing[1]) and not landing_is_hazard:
-                    move = [fx * 2, fz * 2]
+                climbing = (
+                    not obstacle and not self._static_blocked(*first_cell)
+                    and self._climb_kind(here_h, self.cell_height(first_cell, land_t)) == 1
+                )
+                if climbing:
+                    move = [fx, fz]  # jump up onto the ledge / lift in front of us
+                elif (jumpable and not self._blocked(landing[0], landing[1]) and not landing_is_hazard
+                      and self._climb_kind(here_h, self.cell_height(landing, land_t)) != 2):
+                    move = [fx * jump_distance, fz * jump_distance]
                     jump_over_key = first_cell
                 else:
                     move = [fx, fz]
         elif action_id == "interact":
+            here = (self.position[0], self.position[1])
             facing = (self.position[0] + fx, self.position[1] + fz)
-            if facing in self._switch_keys:
-                self.switch_on = not self.switch_on
-                reward += rw["switch"]
+            target = facing if facing in self._switch_keys else (here if here in self._switch_keys else None)
+            if target is not None:
+                if target in self.levers:
+                    self.lever_state[target] = not self.lever_state.get(target, False)
+                    self._recompute_channels()
+                    self.switch_on = any(self.lever_state.values())
+                else:
+                    self.switch_on = not self.switch_on
+                if not self.lever_rewarded:
+                    self.lever_rewarded = True
+                    reward += rw["switch"]
+                objective_changed = True
                 self._sync_dynamic()
+                self._refresh_objective()
             else:
                 reward += rw["invalidInteract"]
+
+        ice_pending: Optional[Cell] = None
+        if not jumping and tuple(self.position) in self.ice:
+            direction = None if not move or move == [0, 0] else (int(math.copysign(1, move[0])) if move[0] else 0, int(math.copysign(1, move[1])) if move[1] else 0)
+            if self.ice_momentum and (direction is None or direction != self.ice_momentum):
+                ice_pending = direction
+                move = [self.ice_momentum[0], self.ice_momentum[1]]
+            elif direction:
+                self.ice_momentum = direction
+
+        if move and not jumping and self.powerup_type == "speed" and self.powerup_until > self.sim_time_seconds:
+            first_speed = (self.position[0] + move[0], self.position[1] + move[1])
+            second_speed = (self.position[0] + move[0] * 2, self.position[1] + move[1] * 2)
+            level_a = self.cell_height(tuple(self.position), self.sim_time_seconds)
+            clear_mid = (not self._static_blocked(*first_speed) and first_speed not in self.blocks
+                         and self._climb_kind(level_a, self.cell_height(first_speed, self.sim_time_seconds)) == 0)
+            clear_end = (not self._static_blocked(*second_speed) and second_speed not in self.blocks
+                         and self._climb_kind(level_a, self.cell_height(second_speed, self.sim_time_seconds)) == 0)
+            clear_hazards = all(c not in self.hazards and not self._dynamic_hazard_active(c, self.sim_time_seconds + RL_ACTION_DURATION_SECONDS) for c in (first_speed, second_speed))
+            if clear_mid and clear_end and (clear_hazards or (self.powerup_type == "shield" and self.powerup_until > self.sim_time_seconds)):
+                move = [move[0] * 2, move[1] * 2]
+                time_steps_used = 0.65
 
         if move:
             nx, nz = self.position[0] + move[0], self.position[1] + move[1]
@@ -607,18 +1163,32 @@ class WorldEnvironment:
                 if not beyond_blocked:
                     self.blocks.remove(key)
                     self.blocks.add(beyond)
+                    try:
+                        self.block_cells[self.block_cells.index(key)] = beyond
+                    except ValueError:
+                        self.block_cells.append(beyond)
                     reward += rw["pushBlock"]
                     objective_changed = True
                     self._sync_dynamic()
                     self._refresh_objective()  # a pushed block can alter the maze
 
+            move_start = self.sim_time_seconds
+            move_end = move_start + time_steps_used * RL_ACTION_DURATION_SECONDS
+            from_h = self.cell_height((previous_position[0], previous_position[1]), move_start)
+            to_h = self.cell_height(key, move_end)
+            reach = self._climb_kind(from_h, to_h)
+            too_high = (reach == 2) if jumping else (reach != 0)
             rotor = self._rotator_collision_during_move(
-                previous_position, [nx, nz], time_steps_used * RL_ACTION_DURATION_SECONDS, jumping,
+                previous_position, [nx, nz], time_steps_used * RL_ACTION_DURATION_SECONDS, jumping, from_h, to_h,
             )
             if self._static_blocked(nx, nz):
                 collision = True
                 self.collision_count += 1
                 reward += rw["collision"]
+            elif too_high and (nx, nz) != (previous_position[0], previous_position[1]):
+                collision = True
+                self.collision_count += 1
+                reward += rw["platformCollision"]
             elif rotor:
                 collision = True
                 rotator_hit = True
@@ -627,16 +1197,23 @@ class WorldEnvironment:
                 self.position, knockback = self._push_from_rotator(previous_position, rotor, [-fx, -fz])
             else:
                 self.position = [nx, nz]
-                if key in self.hazards:
+                hazard_time = self.sim_time_seconds + time_steps_used * RL_ACTION_DURATION_SECONDS
+                dynamic_kind = self.dynamic_hit(key, hazard_time)
+                hit_hazard = key in self.hazards or dynamic_kind is not None
+                shielded = self.powerup_type == "shield" and self.powerup_until > hazard_time
+                if hit_hazard and not shielded:
                     hazard = True
                     death = True
                     self.death_count += 1
                     self.collision_count += 1
-                    reward += rw["hazard"] + rw["deathPenalty"]
+                    reward += rw.get({"laser": "laserHit", "shock": "shockHit", "cutter": "cutterHit", "spikes": "spikeHit"}.get(dynamic_kind or "", ""), rw["hazard"]) + rw["deathPenalty"]
                     self._load_level(self.level)
                 else:
                     if jump_over_key and (nx - fx, nz - fz) == jump_over_key:
                         reward += rw["jumpHazard"]
+                    if jumping and to_h - from_h > STEP_MAX and key not in self.climbed:
+                        self.climbed.add(key)
+                        reward += rw["climb"]
 
                     ci = self._coin_key_to_idx.get(key, -1)
                     if ci >= 0 and not (self.coin_mask & (1 << ci)):
@@ -645,13 +1222,22 @@ class WorldEnvironment:
                         reward += rw["coin"]
                         self._sync_dynamic()
 
+                    pui = self._powerup_key_to_idx.get(key, -1)
+                    if pui >= 0 and not (self.powerup_mask & (1 << pui)):
+                        self.powerup_mask |= 1 << pui
+                        self.powerup_type = self.powerups[pui][2]
+                        self.powerup_until = hazard_time + 9.0
+                        reward += rw.get("powerup", rw["coin"])
+                        self._sync_dynamic()
+
                     pi = self._plate_key_to_idx.get(key, -1)
                     if pi >= 0 and not (self.plate_mask & (1 << pi)):
                         self.plate_mask |= 1 << pi
                         self.total_plates += 1
                         reward += rw["plate"]
                         objective_changed = True
-                        if self.plate_mask == (1 << len(self.plates)) - 1:
+                        self._recompute_channels()
+                        if self.door_plate_mask and (self.plate_mask & self.door_plate_mask) == self.door_plate_mask:
                             self.doors_open = True
                             reward += rw["doorOpen"]
                         self._sync_dynamic()
@@ -662,13 +1248,40 @@ class WorldEnvironment:
                         self.collision_count += 1
                         reward += rw["moverCollision"]
 
-                    if key in self.platforms:
-                        collision = True
-                        self.collision_count += 1
-                        reward += rw["platformCollision"]
 
-        elif (rotor := self._rotator_collision_during_move(
-            previous_position, previous_position, time_steps_used * RL_ACTION_DURATION_SECONDS, jumping,
+        # Hold plates require the player or a movable crate to remain on the switch.
+        for i, plate in enumerate(self.plates):
+            pcell = (plate[0], plate[1])
+            if pcell not in self.continuous_plates:
+                continue
+            held = tuple(self.position) == pcell or pcell in self.blocks
+            was_held = bool(self.plate_mask & (1 << i))
+            if held != was_held:
+                if held:
+                    self.plate_mask |= 1 << i
+                    self.total_plates += 1
+                    reward += rw["plate"]
+                else:
+                    self.plate_mask &= ~(1 << i)
+                objective_changed = True
+                self._sync_dynamic()
+                self._refresh_objective()
+        if self.plates:
+            self._recompute_channels()
+            self.doors_open = (self.plate_mask & self.door_plate_mask) == self.door_plate_mask
+            self._sync_dynamic()
+
+        if tuple(self.position) in self.ice:
+            if ice_pending is not None:
+                self.ice_momentum = ice_pending
+            elif move and move != [0, 0]:
+                self.ice_momentum = (int(math.copysign(1, move[0])) if move[0] else 0, int(math.copysign(1, move[1])) if move[1] else 0)
+        else:
+            self.ice_momentum = None
+
+        stand_h = self.cell_height((previous_position[0], previous_position[1]), self.sim_time_seconds)
+        if not move and (rotor := self._rotator_collision_during_move(
+            previous_position, previous_position, time_steps_used * RL_ACTION_DURATION_SECONDS, jumping, stand_h, stand_h,
         )) is not None:
             collision = True
             rotator_hit = True
@@ -676,15 +1289,35 @@ class WorldEnvironment:
             reward += rw["rotatorCollision"]
             self.position, knockback = self._push_from_rotator(previous_position, rotor, [-fx, -fz])
 
+        # Standing still (waiting / turning / pressing E) inside a pulsing or scanning laser is just as fatal.
+        if not death and (not move or move == [0, 0]):
+            stand = (self.position[0], self.position[1])
+            t_start = self.sim_time_seconds
+            span = time_steps_used * RL_ACTION_DURATION_SECONDS
+            shielded_now = self.powerup_type == "shield" and self.powerup_until > t_start + span
+            stand_kind = self.dynamic_hit(stand, t_start + span * 0.5) or self.dynamic_hit(stand, t_start + span)
+            if not shielded_now and stand_kind is not None:
+                hazard = True
+                death = True
+                self.death_count += 1
+                self.collision_count += 1
+                reward += rw.get({"laser": "laserHit", "shock": "shockHit", "cutter": "cutterHit", "spikes": "spikeHit"}.get(stand_kind, ""), rw["hazard"]) + rw["deathPenalty"]
+                self._load_level(self.level)
+
+        elevation_before = self.cell_height((previous_position[0], previous_position[1]), self.sim_time_seconds)
         self.episode_steps += 1
         self.simulation_steps += time_steps_used
+        if self.powerup_type and self.powerup_until <= self.sim_time_seconds:
+            self.powerup_type = None
         if not death:
             self.level_steps += time_steps_used
 
         pos_key = (self.position[0], self.position[1])
+        if not death and pos_key in self.water:
+            reward += rw.get("waterStep", 0.0)  # wading is harmless but slow: a tiny extra cost
         if not done and not death and self.doors_open and pos_key == self._exit_door_key:
             reward += rw["goal"]
-            reward += rw["speedBonus"] * clamp(1.0 - self.level_steps / LEVEL_TIME_LIMIT_STEPS, 0.0, 1.0)
+            reward += rw["speedBonus"] * clamp(1.0 - self.level_steps / self.time_limit_steps, 0.0, 1.0)
             if self.level_index + 1 < len(self.levels):
                 self.level_index += 1
                 self.level_changes += 1
@@ -695,7 +1328,7 @@ class WorldEnvironment:
                 success = True
                 self.episode_complete = True
 
-        if not done and not death and not level_changed and self.level_steps >= LEVEL_TIME_LIMIT_STEPS:
+        if not done and not death and not level_changed and self.level_steps >= self.time_limit_steps:
             death = True
             timed_out = True
             self.death_count += 1
@@ -722,6 +1355,13 @@ class WorldEnvironment:
             "knockback": knockback,
             "jumpOverKey": key_of(jump_over_key) if jump_over_key else None,
             "timeStepsUsed": time_steps_used,
+            "blocks": [list(c) for c in self.block_cells],
+            "powerupType": self.powerup_type if self.powerup_until > self.sim_time_seconds else None,
+            "powerupRemaining": max(0.0, self.powerup_until - self.sim_time_seconds),
+            "leverOn": self.lever_on,
+            "channelsOn": sorted(self.channels_on),
+            "elevation": self.cell_height((self.position[0], self.position[1]), self.sim_time_seconds),
+            "elevationBefore": elevation_before,
             "levelChanged": level_changed,
             "steps": self.episode_steps,
             "levelSteps": self.level_steps,

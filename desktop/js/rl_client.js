@@ -15,7 +15,6 @@ export class RLClient {
   }
 
   async _request(endpoint, method = 'GET', data = null) {
-    const url = `${this.baseUrl}${endpoint}`;
     const options = {
       method,
       headers: {
@@ -26,30 +25,28 @@ export class RLClient {
       options.body = JSON.stringify(data);
     }
 
+    let res;
     try {
-      const res = await fetch(url, options);
-      if (!res.ok) {
-        const errorText = await res.text();
-        try {
-          const errorJson = JSON.parse(errorText);
-          throw new Error(errorJson.error || `HTTP ${res.status}`);
-        } catch {
-          throw new Error(errorText || `HTTP ${res.status}`);
-        }
-      }
-      return await res.json();
+      res = await fetch(`${this.baseUrl}${endpoint}`, options);
     } catch (err) {
-      // Fallback: if relative proxy failed and not already using direct URL, try direct 127.0.0.1:5050
-      if (this.baseUrl === '' && !endpoint.startsWith('http')) {
-        const directUrl = `http://127.0.0.1:5050${endpoint}`;
-        const fallbackRes = await fetch(directUrl, options);
-        if (!fallbackRes.ok) {
-          throw new Error(`HTTP ${fallbackRes.status}`);
-        }
-        return await fallbackRes.json();
+      // Fall back only when the Electron protocol request itself fails. Preserve
+      // HTTP error responses so backend validation and traceback details survive.
+      if (this.baseUrl !== '' || endpoint.startsWith('http')) throw err;
+      try {
+        res = await fetch(`http://127.0.0.1:5050${endpoint}`, options);
+      } catch (fallbackError) {
+        throw new Error(`Backend unavailable at 127.0.0.1:5050: ${fallbackError.message}`);
       }
-      throw err;
     }
+
+    const body = await res.text();
+    if (!res.ok) {
+      let detail = body;
+      try { detail = JSON.parse(body).error || body; } catch { /* retain plain-text error */ }
+      throw new Error(`HTTP ${res.status}${detail ? ` · ${detail}` : ''}`);
+    }
+    try { return body ? JSON.parse(body) : {}; }
+    catch { throw new Error(`Backend returned invalid JSON from ${endpoint}`); }
   }
 
   async checkHealth() {

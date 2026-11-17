@@ -1,12 +1,16 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
+  <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0b1220" />
-    <title>The-ReaL-Exit — Build & Play</title>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' http://127.0.0.1:5050; worker-src 'self' blob:; media-src 'self' blob:; object-src 'none'; base-uri 'self'" />
+    <title>The-ReaL-Exit · Deeba's Skyway</title>
     <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="ui-glass.css">
   </head>
   <body>
+    <div id="world3d" aria-label="Three-dimensional Skyway world"></div>
     <div class="desktop-shell">
       <nav class="sidebar" aria-label="Main navigation">
         <div class="brand">
@@ -34,6 +38,8 @@
           <button class="nav-btn" data-page="ai">
             <span class="nav-icon">✳</span><span class="nav-text">AI Lab</span>
           </button>
+          <button class="nav-btn" data-page="shop"><span class="nav-icon">◇</span><span class="nav-text">Wardrobe</span></button>
+          <button class="nav-btn" data-page="achievements"><span class="nav-icon">★</span><span class="nav-text">Achievements</span></button>
         </div>
         <div class="sidebar-bottom">
           <div class="nav-label" style="padding-top: 20px">Preferences</div>
@@ -56,6 +62,7 @@
             <b id="breadcrumb">Home</b>
           </div>
           <div class="top-actions">
+            <button class="wallet-pill" data-go="shop" title="Open coin shop">◉ <b id="walletCount">0</b> COINS</button>
             <span class="top-status"><i></i>LOCAL WORLD</span
             ><button
               class="top-icon"
@@ -71,10 +78,10 @@
             <div class="home-hero">
               <div class="hero-copy">
                 <div class="eyebrow">YOUR WORLD STARTS HERE</div>
-                <h1>Press the plate.<br />Make your way out.</h1>
+                <h1>Meet Deeba.<br />Find the way out.</h1>
                 <p>
-                  Cross four compact rooms. Press each plate, dodge the rotating
-                  bars, and pass through the door before it seals behind you.
+                  Escape six CatLab test chambers: push crates onto hold-plates, ride lever-powered lifts,
+                  jump onto ledges, dodge lasers, shocks, saw cutters and acid, and dress Deeba up in the wardrobe.
                 </p>
                 <div class="button-row">
                   <button class="tool primary" id="homePlayBtn">
@@ -89,11 +96,11 @@
             <div class="home-stats">
               <div class="home-stat">
                 <div class="label">CAMPAIGN</div>
-                <strong>04</strong><small>Linked puzzle rooms</small>
+                <strong id="homeCampaignCount">09</strong><small>Linked puzzle rooms</small>
               </div>
               <div class="home-stat">
                 <div class="label">LEVELS</div>
-                <strong id="homeSparks">1 / 4</strong
+                <strong id="homeSparks">1 / 9</strong
                 ><small>Current campaign position</small>
               </div>
               <div class="home-stat">
@@ -118,11 +125,11 @@
                   <div class="world-thumb"></div>
                   <div class="recent-info">
                     <h3>The Pressure Run</h3>
-                    <p>Four linked rooms · pressure plates and rotating bars</p>
+                    <p>Six lab chambers · lasers, shocks, cutters and acid</p>
                     <div class="recent-actions">
                       <button class="tool primary" id="recentPlayBtn">
                         Start campaign</button
-                      ><span class="mini-meta">13 × 13 GRID</span>
+                      ><span class="mini-meta">17 × 17 GRID</span>
                     </div>
                   </div>
                 </article>
@@ -161,7 +168,7 @@
             <div class="page-heading">
               <div>
                 <div class="eyebrow" id="worldEyebrow">
-                  CAMPAIGN · LEVEL 1 OF 4
+                  CAMPAIGN · LEVEL 1 OF 9
                 </div>
                 <h1 id="worldTitle">Level 1</h1>
                 <p id="worldDescription">
@@ -193,16 +200,15 @@
                 <div class="game-card">
                   <div class="game-top">
                     <span class="pill active" id="modePill">PLAY MODE</span
+                    ><button class="tool secondary" id="pauseBtn" aria-label="Pause game">Ⅱ Pause</button
+                    ><button class="tool secondary" id="menuBtn">⌂ Menu</button
                     ><button class="tool secondary" id="fullscreenBtn">
-                      Enter fullscreen</button
+                      Fullscreen</button
                     ><span class="pill">PRESSURE RUN · 3D</span>
                   </div>
-                  <div class="canvas-wrap">
-                    <div
-                      id="world3d"
-                      aria-label="Three-dimensional The-ReaL-Exit game world"
-                    ></div>
-                  </div>
+                  <div class="vignette" aria-hidden="true"></div>
+                  <div class="interact-prompt" id="interactPrompt"><kbd>E</kbd><span>Pull lever</span></div>
+                  <div class="hud-hint" id="hudHint"></div>
                   <div class="toast" id="toast"></div>
                   <div class="completion-overlay" id="completionOverlay" hidden>
                     <div class="completion-card">
@@ -214,6 +220,10 @@
                       </button>
                     </div>
                   </div>
+                  <div class="pause-overlay" id="pauseOverlay" hidden>
+                    <div class="completion-card"><div class="eyebrow">RUN PAUSED</div><h2>Take a breather.</h2><p>Your room is waiting.</p><button class="tool primary" id="resumeBtn">Resume run</button></div>
+                  </div>
+                  <div class="transition-overlay" id="transitionOverlay" hidden><div class="transition-panel"><div class="eyebrow" id="transitionStage">ROOM CLEAR</div><h2 id="transitionTitle">Excellent work.</h2><p id="transitionReward">Gold and stars secured</p><div class="transition-track"><i></i></div></div></div>
                   <div class="game-bottom">
                     <div class="objective">
                       <small>YOUR OBJECTIVE</small>Press every plate, then cross
@@ -235,12 +245,13 @@
                     >
                   </div>
                   <div class="tool-group">
-                    <span class="stat">LEVEL <b id="coinCount">1 / 4</b></span
+                    <span class="stat">LEVEL <b id="coinCount">1 / 9</b></span
                     ><span class="stat"
                       >COINS <b id="coinProgress">0 / 0</b></span
-                    ><span class="stat">TIME LEFT <b id="timer">00:08</b></span
-                    ><span class="stat">DEATHS <b id="deathCount">0</b></span
-                    ><span class="stat">MOVES <b id="moves">0</b></span
+                    ><span class="stat">TIME LEFT <b id="timer">00:45</b></span
+                    ><span class="stat secondary-stat">DEATHS <b id="deathCount">0</b></span
+                    ><span class="stat secondary-stat">MOVES <b id="moves">0</b></span
+                    ><span class="stat">BOOST <b id="activePowerup">None</b></span
                     ><button class="tool secondary" id="restartBtn">
                       ↺ Restart level
                     </button>
@@ -267,8 +278,9 @@
                     id="addLevelBtn"
                     style="width: 100%; margin-top: 9px"
                   >
-                    ＋ Add level</button
-                  ><label class="progress-note standalone-toggle"
+                    ＋ Add level</button>
+                  <button class="tool primary" id="generateChallengeBtn" style="width:100%;margin-top:8px">✦ Generate experimental chamber</button>
+                  <label class="progress-note standalone-toggle"
                     ><input id="standaloneLevel" type="checkbox" /> Play this as
                     a standalone level</label
                   ><label
@@ -287,81 +299,21 @@
                 </div>
                 <div class="section" id="buildToolsSection">
                   <div class="label">LEVEL TOOLS</div>
-                  <div class="tool-grid">
-                    <button class="tile-tool selected" data-tool="select">
-                      <em>⌖</em>Select</button
-                    ><button class="tile-tool" data-tool="wall">
-                      <em>▰</em>Wall</button
-                    ><button class="tile-tool" data-tool="plate">
-                      <em>▣</em>Pressure plate</button
-                    ><button class="tile-tool" data-tool="door">
-                      <em>▤</em>Exit door</button
-                    ><button class="tile-tool" data-tool="rotator">
-                      <em>↻</em>Rotator</button
-                    ><button class="tile-tool" data-tool="start">
-                      <em>▶</em>Start</button
-                    ><button class="tile-tool" data-tool="erase">
-                      <em>⌫</em>Erase
-                    </button>
-                  </div>
-                  <div class="progress-note" id="editHint">
-                    Choose a level tool, then click a tile in the 3D room.
-                  </div>
-                  <div class="progress-note" id="selectionInfo">
-                    Selected tile: none
-                  </div>
+                  <div class="tool-grid"><button class="tile-tool selected" data-tool="select"><em>⌖</em>Select</button><button class="tile-tool" data-tool="wall"><em>▰</em>Wall</button><button class="tile-tool" data-tool="block"><em>▣</em>Crate</button><button class="tile-tool" data-tool="platform"><em>▭</em>Ledge</button><button class="tile-tool" data-tool="hazard"><em>☣</em>Acid</button><button class="tile-tool" data-tool="water"><em>≈</em>Water</button><button class="tile-tool" data-tool="ice"><em>❄</em>Ice</button><button class="tile-tool" data-tool="spikes"><em>▲</em>Spikes</button><button class="tile-tool" data-tool="cutter"><em>✺</em>Cutter</button><button class="tile-tool" data-tool="laser"><em>═</em>Laser</button><button class="tile-tool" data-tool="shock"><em>ϟ</em>Shock</button><button class="tile-tool" data-tool="rotator"><em>✥</em>Spinner</button><button class="tile-tool" data-tool="plate"><em>◉</em>Button</button><button class="tile-tool" data-tool="lever"><em>⏻</em>Lever</button><button class="tile-tool" data-tool="lift"><em>⇕</em>Lift</button><button class="tile-tool" data-tool="coin"><em>●</em>Coin</button><button class="tile-tool" data-tool="powerup"><em>✦</em>Power-up</button><button class="tile-tool" data-tool="switch"><em>◆</em>Crystal</button><button class="tile-tool" data-tool="door"><em>▥</em>Door</button><button class="tile-tool" data-tool="start"><em>▶</em>Start</button><button class="tile-tool" data-tool="erase"><em>⌫</em>Erase</button></div>
+                  <div class="progress-note" id="editHint">Click a piece to select it, then configure it or drag its handles to resize.</div>
+                  <label class="progress-note" id="optPowerup" hidden style="display:block;margin:10px 0">Power-up type
+                    <select id="powerupType" class="setting-select" style="width:100%;margin-top:5px"><option value="speed">Speed boost</option><option value="jump">High jump</option><option value="freeze">Time freeze</option><option value="shield">Shield</option></select>
+                  </label>
+                  <label class="progress-note" id="optPlate" hidden style="display:block;margin:10px 0">Pressure plate behaviour
+                    <select id="plateMode" class="setting-select" style="width:100%;margin-top:5px"><option value="latch">Momentary · stays active</option><option value="hold">Hold · player or crate must stay</option></select>
+                  </label>
+                  <div class="progress-note" id="selectionInfo">Selected tile: none</div>
                 </div>
-                <div class="section" id="objectInspector">
+                <div class="section" id="objectInspector" hidden>
                   <div class="label">SELECTED PIECE</div>
-                  <div class="progress-note" id="inspectorType">
-                    No object selected
-                  </div>
-                  <div
-                    style="
-                      display: grid;
-                      grid-template-columns: 1fr 1fr;
-                      gap: 8px;
-                      margin-top: 10px;
-                    "
-                  >
-                    <label class="progress-note"
-                      >Tile X
-                      <input
-                        id="objectX"
-                        type="number"
-                        min="1"
-                        max="13"
-                        step="1"
-                        value="1"
-                        style="width: 100%" /></label
-                    ><label class="progress-note"
-                      >Tile Z
-                      <input
-                        id="objectZ"
-                        type="number"
-                        min="1"
-                        max="13"
-                        step="1"
-                        value="1"
-                        style="width: 100%"
-                    /></label>
-                  </div>
-                  <input id="objectHeight" type="range" hidden /><input
-                    id="objectSize"
-                    type="range"
-                    hidden
-                  /><input id="objectColor" type="color" hidden /><input
-                    id="objectCollision"
-                    type="checkbox"
-                    hidden
-                  /><button
-                    class="tool"
-                    id="applyObjectProperties"
-                    style="margin-top: 10px; width: 100%"
-                    disabled
-                  >
-                    Move selected piece
-                  </button>
+                  <div class="progress-note" id="inspectorType">No object selected</div>
+                  <div id="inspectorFields" class="inspector-fields"></div>
+                  <div class="progress-note" style="margin-top:8px">Drag the coloured handles in the room to resize in X (red), Y (green) and Z (blue).</div>
                 </div>
                 <div class="section" id="objectivesSection">
                   <div class="label">LEVEL OBJECTIVE</div>
@@ -387,7 +339,7 @@
                   <div class="world-row">
                     Active room <span id="activeLevelName">Level 1</span>
                   </div>
-                  <div class="world-row">Grid size <span>13 × 13</span></div>
+                  <div class="world-row">Grid size <span>17 × 17</span></div>
                   <div class="world-row">
                     Placed pieces <span id="objectCount">0</span>
                   </div>
@@ -429,18 +381,16 @@
                 <h1>My Worlds</h1>
                 <p>Your saved worlds live here on this computer.</p>
               </div>
-              <button class="tool primary" data-go="build">
-                ⌘ &nbsp; Open editor
-              </button>
+              <div class="button-row"><button class="tool" id="importWorldBtn">Import level JSON</button><input id="importWorldFile" type="file" accept="application/json,.json" hidden /><button class="tool primary" data-go="build">⌘ &nbsp; Open editor</button></div>
             </div>
             <div class="library-grid">
               <article class="surface-card library-card">
                 <div class="library-art"></div>
                 <div class="library-copy">
                   <h3>The Pressure Run</h3>
-                  <p>Four rooms connected by pressure plate doors.</p>
+                  <p>Eight rooms with coins, timing hazards and pressure routes.</p>
                   <div class="library-meta">
-                    <span>CAMPAIGN</span><span>13 × 13</span>
+                    <span>CAMPAIGN</span><span>17 × 17</span>
                   </div>
                   <div class="button-row" style="margin-top: 14px">
                     <button class="tool primary" id="libraryPlayBtn">
@@ -527,11 +477,11 @@
                 <p class="rl-description" id="rlAlgorithmDescription"></p>
                 <div class="label rl-subhead">AGENT PERCEPTION</div>
                 <p class="rl-description">
-                  A heading-relative 9 × 9 local view of walls, blocks, hazards,
-                  moving obstacles, collectibles, plates, switches, and doors,
-                  plus <b>four “danger” layers</b> that show which cells the
-                  rotating bars will sweep during each of the next four
-                  actions. A shortest-path <b>compass</b> says which neighbouring
+                  A heading-relative 9 × 9 local view of walls, movable cargo,
+                  lava, timed lasers, electric gates, ice, power-ups, plates,
+                  levers, coins, moving obstacles, switches, and doors,
+                  plus <b>four predicted danger layers</b> for rotating bars,
+                  timed laser sweeps, and electric gates. A shortest-path <b>compass</b> says which neighbouring
                   cells are closer to the current goal (plate, then exit), and
                   the level timer is included. Absolute coordinates are not
                   supplied, so the policy generalises across levels.
@@ -646,6 +596,31 @@
             </div>
           </section>
 
+          <section class="app-page" id="shop-page">
+            <div class="page-heading"><div><div class="eyebrow">DEEBA'S WARDROBE</div><h1>Wardrobe</h1><p>Spend the coins you collect on finishes, hats, eyewear and more. Click an item to try it on, then buy it.</p></div><div class="wallet-large">◉ <b id="shopWallet">0</b> coins</div></div>
+            <div class="wardrobe-layout">
+              <div class="surface-card wardrobe-stage-card">
+                <div id="wardrobeStage" class="wardrobe-stage"></div>
+                <div class="mini-meta" id="wardrobeCount">0 collected</div>
+              </div>
+              <div class="wardrobe-main">
+                <div class="chip-row" id="wardrobeTabs"></div>
+                <div class="outfit-grid" id="shopGrid"></div>
+                <article class="surface-card shop-item world-unlock"><div class="skin-swatch annex"></div><div><h2>Quantum Annex</h2><p>Unlock a bonus chamber with a fresh layout.</p></div><button class="tool primary" data-world="quantum-annex" data-cost="25">Unlock · 25 coins</button></article>
+              </div>
+            </div>
+          </section>
+
+          <section class="app-page" id="achievements-page">
+            <div class="page-heading"><div><div class="eyebrow">MILESTONES</div><h1>Achievements</h1><p>Small wins from your experiments are tracked locally.</p></div><div class="wallet-large">UNLOCKED <b id="achievementCount">0 / 4</b></div></div>
+            <div class="achievement-grid">
+              <article class="surface-card achievement-card" data-achievement="first_coin"><span>◉</span><div><h2>First Discovery</h2><p>Collect your first gold coin.</p></div></article>
+              <article class="surface-card achievement-card" data-achievement="first_clear"><span>↗</span><div><h2>Clean Escape</h2><p>Clear a campaign room.</p></div></article>
+              <article class="surface-card achievement-card" data-achievement="first_powerup"><span>✦</span><div><h2>Powered Up</h2><p>Use your first temporary boost.</p></div></article>
+              <article class="surface-card achievement-card" data-achievement="coin_collector"><span>✧</span><div><h2>Coin Collector</h2><p>Bank ten gold coins.</p></div></article>
+            </div>
+          </section>
+
           <section class="app-page" id="settings-page">
             <div class="page-heading">
               <div>
@@ -660,7 +635,8 @@
                   General</button
                 ><button data-settings-tab="controls">Controls</button
                 ><button data-settings-tab="appearance">Appearance</button
-                ><button data-settings-tab="data">Data & saves</button>
+                ><button data-settings-tab="data">Data & saves</button
+                ><button data-settings-tab="diagnostics">Diagnostics</button>
               </div>
               <div class="surface-card settings-panel">
                 <div class="settings-content" data-settings-content="general">
@@ -680,6 +656,9 @@
                       <option value="first">First person</option>
                     </select>
                   </div>
+                  <div class="setting-row"><div><strong>Master volume</strong></div><div class="slider-wrap"><input type="range" id="volMaster" min="0" max="100" value="80" /><span id="volMasterLabel">80%</span></div></div>
+                  <div class="setting-row"><div><strong>Music volume</strong></div><div class="slider-wrap"><input type="range" id="volMusic" min="0" max="100" value="55" /><span id="volMusicLabel">55%</span></div></div>
+                  <div class="setting-row"><div><strong>Effects volume</strong></div><div class="slider-wrap"><input type="range" id="volSfx" min="0" max="100" value="90" /><span id="volSfxLabel">90%</span></div></div>
                   <div class="setting-row">
                     <div>
                       <strong>AI Lab</strong
@@ -755,6 +734,7 @@
                     </div>
                     <span class="mini-meta">EMBER GLOW</span>
                   </div>
+                  <div class="setting-row"><div><strong>Game audio</strong><small>Short synthesized cues for coins, boosts, buttons and hazards.</small></div><button class="tool" id="soundToggle">Sound on</button></div>
                 </div>
                 <div
                   class="settings-content"
@@ -791,6 +771,16 @@
                     </div>
                     <button class="tool" id="restoreWorldBtn">Restore</button>
                   </div>
+                </div>
+                <div class="settings-content" data-settings-content="diagnostics" hidden>
+                  <div class="label">APPLICATION LOG</div>
+                  <p class="progress-note">Recent startup, navigation, AI backend, and error messages. The full renderer console is available from View → Toggle DevTools.</p>
+                  <div class="diagnostic-actions">
+                    <button class="tool" id="refreshLogsBtn">Refresh logs</button>
+                    <button class="tool" id="copyLogsBtn">Copy logs</button>
+                    <button class="tool" id="clearLogsBtn">Clear logs</button>
+                  </div>
+                  <textarea id="diagnosticLog" class="diagnostic-log" readonly spellcheck="false" aria-label="Application diagnostic logs"></textarea>
                 </div>
               </div>
             </div>

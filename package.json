@@ -22,6 +22,8 @@
     },
     "files": [
       "index.html",
+      "style.css",
+      "ui-glass.css",
       "desktop/**/*",
       "backend/**/*",
       "node_modules/three/**/*",

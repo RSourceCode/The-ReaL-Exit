@@ -3,6 +3,7 @@
 import copy
 import threading
 import time
+import traceback
 from typing import Any, Dict, Optional
 
 from backend.config import DEFAULT_REWARDS, REWARD_LABELS
@@ -119,6 +120,8 @@ class BackendApp:
             with self.training_lock:
                 self.training_error = str(err)
                 self.training_state = "error"
+            print(f"[RL training] background worker failed: {err}", flush=True)
+            traceback.print_exc()
 
     def _training_status_locked(self) -> Dict[str, Any]:
         return {

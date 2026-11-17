@@ -4,6 +4,7 @@ import argparse
 import http.server
 import json
 import sys
+import traceback
 from pathlib import Path
 from typing import Tuple
 from urllib.parse import urlparse
@@ -61,6 +62,8 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
             else:
                 self._send_json(404, {"error": f"Endpoint not found: {path}"})
         except Exception as err:
+            print(f"[API] GET {path} failed: {err}", file=sys.stderr, flush=True)
+            traceback.print_exc(file=sys.stderr)
             self._send_json(500, {"error": str(err)})
 
     def do_POST(self) -> None:
@@ -88,6 +91,8 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
             else:
                 self._send_json(404, {"error": f"Endpoint not found: {path}"})
         except Exception as err:
+            print(f"[API] POST {path} failed: {err}", file=sys.stderr, flush=True)
+            traceback.print_exc(file=sys.stderr)
             self._send_json(500, {"error": str(err)})
 
     def log_message(self, format: str, *args) -> None:

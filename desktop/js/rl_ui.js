@@ -65,13 +65,13 @@ export class RLUIController {
         },
       ];
       this.defaultRewards = {
-        timeStep: -0.03, progress: 0.12, coin: 1, plate: 3, doorOpen: 2, goal: 10,
+        timeStep: -0.03, progress: 0.12, coin: 1, powerup: 1.5, plate: 3, doorOpen: 2, goal: 10,
         collision: -0.25, hazard: -2, rotatorCollision: -0.75, moverCollision: -0.5,
         platformCollision: -0.3, invalidInteract: -0.05, pushBlock: 0.05, jumpHazard: 0.5, switch: 0.3,
         deathPenalty: -3, speedBonus: 3,
       };
       this.rewardLabels = {
-        timeStep: 'Per action / time step', progress: 'Shortest-path progress to objective (per cell)', coin: 'Collect coin',
+        timeStep: 'Per action / time step', progress: 'Shortest-path progress to objective (per cell)', coin: 'Collect coin', powerup: 'Collect and activate a boost',
         plate: 'Press pressure plate', doorOpen: 'Open door', goal: 'Reach goal',
         collision: 'Wall collision', hazard: 'Hit hazard', rotatorCollision: 'Rotating obstacle hit',
         moverCollision: 'Moving obstacle hit', platformCollision: 'Raised platform hit',

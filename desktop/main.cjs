@@ -43,6 +43,10 @@ function startPythonBackend() {
       console.error(`[Python Backend Error] ${data.toString().trim()}`);
     });
 
+    pythonBackendProcess.on('error', (error) => {
+      console.error('[Python Backend] failed to start:', error.message);
+    });
+
     pythonBackendProcess.on('exit', (code) => {
       console.log(`Python Backend exited with code ${code}`);
       pythonBackendProcess = null;
@@ -149,7 +153,19 @@ function createWindow() {
   window.webContents.on('render-process-gone', (_event, details) => {
     console.error('The-ReaL-Exit renderer stopped:', details.reason, details.exitCode);
   });
+  window.webContents.on('console-message', (_event, details, legacyLine, legacySource) => {
+    const message = typeof details === 'object' ? details.message : details;
+    const level = typeof details === 'object' ? details.level : 'log';
+    const location = typeof details === 'object'
+      ? `${details.sourceId || ''}:${details.lineNumber || 0}`
+      : `${legacySource || ''}:${legacyLine || 0}`;
+    const output = `[Renderer ${level}] ${message} (${location})`;
+    if (String(level).toLowerCase().includes('error') || level === 2) console.error(output);
+    else if (String(level).toLowerCase().includes('warn') || level === 1) console.warn(output);
+    else console.log(output);
+  });
 
+  console.info('[Desktop] loading app window');
   window.loadURL('worldforge://app/index.html');
 
   // Keep links from opening an unexpected window inside the game.
@@ -192,6 +208,7 @@ function installMenu() {
 }
 
 app.whenReady().then(() => {
+  console.info('[Desktop] Electron ready');
   app.setName('The-ReaL-Exit');
   app.setAppUserModelId('com.worldforge.game');
   startPythonBackend();
