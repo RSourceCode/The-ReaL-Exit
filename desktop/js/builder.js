@@ -11,13 +11,14 @@
 import * as THREE from '../../node_modules/three/build/three.module.js';
 import { RoundedBoxGeometry } from './vendor/rounded_box_geometry.js';
 import {
-  GRID_SIZE, HALF_GRID, EXIT_OPENING_WIDTH, WALL_TOP_PAD, PLATFORM_TOP_PAD, LIFT_DEFAULT_HEIGHT,
-  gridToWorld, hasCell, laserCenter, laserSpec, shockSpec, shockPhase, cutterPosition, cutterSpec, spikeUp,
+  HALF_X, HALF_Z, DOOR_SPAN, DOOR_CLEAR, WALL_TOP_PAD, PLATFORM_TOP_PAD, LIFT_DEFAULT_HEIGHT,
+  activateWorld, doorSide, gridToWorld, hasCell, laserCenter, laserSpec, shockSpec, shockPhase, cutterPosition, cutterSpec, spikeUp,
   SHOCK_CHARGE_AT, SHOCK_STRIKE_AT, liftTop,
   channelOf, channelColor, CHANNELS,
 } from './constants.js';
 import { createMaterial, addBox, disposeGroup, getObjectProperties, mergeCells, surfaceHeightAt } from './materials.js';
 import { createDeeba } from './character.js';
+import { LIQUID, liquidVertex, liquidFragment } from './liquid.js';
 
 export { createDeeba as createPlayerMesh };
 
@@ -142,6 +143,11 @@ function textures() {
       g.fillStyle = 'rgba(56,230,200,0.75)'; g.font = 'bold 22px monospace'; g.fillText('CATLAB', 14, 34); g.font = '14px monospace'; g.fillText('SUBJECT: DEEBA', 14, 56);
       for (let y = 0; y < n; y += 4) { g.fillStyle = 'rgba(0,0,0,0.18)'; g.fillRect(0, y, n, 1); }
     }, { repeat: false }),
+    exitSign: canvasTexture(256, (g, n) => {
+      g.fillStyle = '#0c1d1a'; g.fillRect(0, 0, n, n / 3);
+      g.strokeStyle = '#7bffd0'; g.lineWidth = 6; g.strokeRect(5, 5, n - 10, n / 3 - 10);
+      g.fillStyle = '#7bffd0'; g.font = '800 54px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('EXIT', n / 2, n / 6 + 3);
+    }, { repeat: false }),
     arrow: canvasTexture(128, (g, n) => {
       g.fillStyle = '#2d4a47'; g.fillRect(0, 0, n, n);
       g.strokeStyle = '#7bffd0'; g.lineWidth = 10; g.lineCap = 'round'; g.lineJoin = 'round';
@@ -209,9 +215,11 @@ export function buildBoard(groups, world, runtimeState) {
   const { activatedPlates, collected, switchActivated, doorsOpen, powerupsCollected } = runtimeState;
   [boardGroup, objectsGroup, coinsGroup, decorationGroup].forEach(disposeGroup);
   const T = textures();
-  const edge = GRID_SIZE - 1;
+  const { w: W, d: D } = activateWorld(world);
+  const edgeX = W - 1, edgeZ = D - 1;
+  const K = Math.max(1, Math.max(W, D) / 17);
   const door = world.exitDoor;
-  const isBorder = ([x, z]) => x === 0 || z === 0 || x === edge || z === edge;
+  const isBorder = ([x, z]) => x === 0 || z === 0 || x === edgeX || z === edgeZ;
   const isDoorCell = ([x, z]) => door && door[0] === x && door[1] === z;
 
   const out = {
@@ -221,25 +229,26 @@ export function buildBoard(groups, world, runtimeState) {
   };
   const updaters = [];
 
-  // ── The closed lab room: tiled floor, panelled walls on all four sides, ceiling, trim, pipes, screens ──
+  // ── The closed lab room: floor, panelled walls on all four sides, ceiling, trim, pipes, screens ──
   const ROOM_H = 4.6;
   const scalePlane = (geo, rx, ry) => { const uv = geo.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * rx, uv.getY(i) * ry); uv.needsUpdate = true; return geo; };
   const accentMat = new THREE.MeshBasicMaterial({ color: '#ffffff', toneMapped: false }); accentMat.color = ACCENT;
   // Continuous floor: a smooth resin pad inside the room, and the same lab hall floor running on past the walls
   // (so the room is plainly *in* a building, not floating).
   const floorMat = new THREE.MeshStandardMaterial({ map: T.epoxy, color: '#ffffff', roughness: 0.32, metalness: 0.15 });
-  const slab = new THREE.Mesh(new THREE.PlaneGeometry(GRID_SIZE, GRID_SIZE), floorMat);
+  const slab = new THREE.Mesh(new THREE.PlaneGeometry(W, D), floorMat);
   slab.rotation.x = -Math.PI / 2; slab.position.y = 0; slab.receiveShadow = true; slab.userData.kind = 'floor';
   boardGroup.add(slab); out.floorTargets.push(slab);
   const hallMat = new THREE.MeshStandardMaterial({ map: T.concrete, color: '#ffffff', roughness: 0.55, metalness: 0.2 });
-  const hallFloor = new THREE.Mesh(scalePlane(new THREE.PlaneGeometry(160, 160), 24, 24), hallMat);
+  const hallSize = 160 * K;
+  const hallFloor = new THREE.Mesh(scalePlane(new THREE.PlaneGeometry(hallSize, hallSize), 24 * K, 24 * K), hallMat);
   hallFloor.rotation.x = -Math.PI / 2; hallFloor.position.y = -0.03; hallFloor.receiveShadow = true; boardGroup.add(hallFloor);
   const panelMat = new THREE.MeshStandardMaterial({ map: T.panel, color: '#ffffff', roughness: 0.6, metalness: 0.3, side: THREE.FrontSide });
   const stripeMat = new THREE.MeshStandardMaterial({ map: T.stripes, color: '#ffffff', roughness: 0.7 });
   // Wall segment: `side` is where it stands (-1 / +1), `axis` which coordinate the wall is perpendicular to.
   const wallSegment = (axis, side, from, to) => {
     if (to < from) return;
-    const len = to - from + 1, mid = (from + to) / 2 - HALF_GRID, c = side * (HALF_GRID - 0.5);
+    const len = to - from + 1, mid = (from + to) / 2 - (axis === 'z' ? HALF_X : HALF_Z), c = side * ((axis === 'z' ? HALF_Z : HALF_X) - 0.5);
     const place = (mesh, inset = 0, y = 0) => {
       const cc = c - side * inset;
       if (axis === 'z') { mesh.position.set(mid, y, cc); mesh.rotation.y = side < 0 ? 0 : Math.PI; } else { mesh.position.set(cc, y, mid); mesh.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2; }
@@ -256,43 +265,40 @@ export function buildBoard(groups, world, runtimeState) {
     pipe2.rotation.z = Math.PI / 2; place(pipe2, 0.16, 3.65);
     return { place, len };
   };
-  const wallPieces = [];
   for (const [axis, side] of [['z', -1], ['z', 1], ['x', -1], ['x', 1]]) {
-    const here = door && (axis === 'z' ? door[1] === (side < 0 ? 0 : edge) : door[0] === (side < 0 ? 0 : edge));
-    if (!here) wallPieces.push(wallSegment(axis, side, 0, edge));
+    const last = axis === 'z' ? edgeX : edgeZ;
+    const here = door && (axis === 'z' ? door[1] === (side < 0 ? 0 : edgeZ) : door[0] === (side < 0 ? 0 : edgeX));
+    if (!here) wallSegment(axis, side, 0, last);
     else {
-      const index = door[axis === 'z' ? 0 : 1], half = Math.ceil((EXIT_OPENING_WIDTH - 1) / 2);
-      wallPieces.push(wallSegment(axis, side, 0, index - 1 - half), wallSegment(axis, side, index + 1 + half, edge));
-      // header panel above the opening
-      const wide = (half * 2 + 1) * 1.0, c = side * (HALF_GRID - 0.5), mid = index - HALF_GRID;
-      const header = new THREE.Mesh(new THREE.PlaneGeometry(wide, ROOM_H - 3.3), panelMat);
-      if (axis === 'z') { header.position.set(mid, 3.3 + (ROOM_H - 3.3) / 2, c); header.rotation.y = side < 0 ? 0 : Math.PI; } else { header.position.set(c, 3.3 + (ROOM_H - 3.3) / 2, mid); header.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2; }
-      boardGroup.add(header);
+      const index = door[axis === 'z' ? 0 : 1];
+      wallSegment(axis, side, 0, index - 2); wallSegment(axis, side, index + 2, last);
     }
   }
   const lightPanelMat = new THREE.MeshBasicMaterial({ color: '#e9fbff', toneMapped: false });
   // corner pillars + a top frame so the chamber reads as a built room from outside
   const pillarMat = createMaterial('#e3ecee', 0.4, 0.3);
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
-    const pil = new THREE.Mesh(new THREE.BoxGeometry(0.7, ROOM_H + 0.3, 0.7), pillarMat); pil.position.set(sx * (HALF_GRID + 0.15), (ROOM_H + 0.3) / 2, sz * (HALF_GRID + 0.15)); pil.castShadow = true; boardGroup.add(pil);
-    const ring = new THREE.Mesh(new THREE.BoxGeometry(0.74, 0.08, 0.74), accentMat); ring.position.set(sx * (HALF_GRID + 0.15), 3.9, sz * (HALF_GRID + 0.15)); boardGroup.add(ring);
+    const pil = new THREE.Mesh(new THREE.BoxGeometry(0.7, ROOM_H + 0.3, 0.7), pillarMat); pil.position.set(sx * (HALF_X + 0.15), (ROOM_H + 0.3) / 2, sz * (HALF_Z + 0.15)); pil.castShadow = true; boardGroup.add(pil);
+    const ring = new THREE.Mesh(new THREE.BoxGeometry(0.74, 0.08, 0.74), accentMat); ring.position.set(sx * (HALF_X + 0.15), 3.9, sz * (HALF_Z + 0.15)); boardGroup.add(ring);
   }
   // ── The hall around the room: far walls, columns, tanks, catwalk, cable runs, big overhead pipes ──
+  // Authored for a 17-cell room; bigger rooms simply scale the whole hall up so nothing pokes into the play space.
+  const hall = new THREE.Group(); hall.scale.setScalar(K); boardGroup.add(hall);
   const HALL = 34, HALL_H = 15;
   const hallWallMat = new THREE.MeshStandardMaterial({ map: T.panel, color: '#7fa0a8', roughness: 0.7, metalness: 0.2 });
   for (const [hx, hz, ry] of [[0, -HALL, 0], [0, HALL, Math.PI], [-HALL, 0, Math.PI / 2], [HALL, 0, -Math.PI / 2]]) {
-    const w = new THREE.Mesh(scalePlane(new THREE.PlaneGeometry(HALL * 2, HALL_H), 16, 4), hallWallMat); w.position.set(hx, HALL_H / 2, hz); w.rotation.y = ry; boardGroup.add(w);
-    const strip = new THREE.Mesh(new THREE.PlaneGeometry(HALL * 2, 0.7), accentMat); strip.position.set(hx - Math.sin(ry) * 0.05, 8.5, hz + Math.cos(ry) * -0.05 * -1); strip.rotation.y = ry; boardGroup.add(strip);
+    const w = new THREE.Mesh(scalePlane(new THREE.PlaneGeometry(HALL * 2, HALL_H), 16, 4), hallWallMat); w.position.set(hx, HALL_H / 2, hz); w.rotation.y = ry; hall.add(w);
+    const strip = new THREE.Mesh(new THREE.PlaneGeometry(HALL * 2, 0.7), accentMat); strip.position.set(hx - Math.sin(ry) * 0.05, 8.5, hz + Math.cos(ry) * -0.05 * -1); strip.rotation.y = ry; hall.add(strip);
     const win = new THREE.Mesh(new THREE.PlaneGeometry(HALL * 1.2, 3.2), new THREE.MeshBasicMaterial({ color: '#bdf3ff', transparent: true, opacity: 0.35, toneMapped: false }));
-    win.position.set(hx + Math.sin(ry) * -0.08 * 0 + (ry === Math.PI / 2 ? 0.08 : ry === -Math.PI / 2 ? -0.08 : 0), 5.5, hz + (ry === 0 ? 0.08 : ry === Math.PI ? -0.08 : 0)); win.rotation.y = ry; boardGroup.add(win);
+    win.position.set(hx + (ry === Math.PI / 2 ? 0.08 : ry === -Math.PI / 2 ? -0.08 : 0), 5.5, hz + (ry === 0 ? 0.08 : ry === Math.PI ? -0.08 : 0)); win.rotation.y = ry; hall.add(win);
   }
   const hallCeil = new THREE.Mesh(scalePlane(new THREE.PlaneGeometry(HALL * 2, HALL * 2), 16, 16), new THREE.MeshStandardMaterial({ map: T.panel, color: '#5c7a83', roughness: 0.9 }));
-  hallCeil.rotation.x = Math.PI / 2; hallCeil.position.y = HALL_H; boardGroup.add(hallCeil);
+  hallCeil.rotation.x = Math.PI / 2; hallCeil.position.y = HALL_H; hall.add(hallCeil);
   const colMat = createMaterial('#bcd0d4', 0.5, 0.3);
   for (let i = 0; i < 12; i++) {
     const a = (i / 12) * Math.PI * 2 + 0.2, r = 17 + (i % 3) * 4;
-    const col = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.8, HALL_H, 14), colMat); col.position.set(Math.cos(a) * r, HALL_H / 2, Math.sin(a) * r); col.castShadow = true; boardGroup.add(col);
-    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.82, 0.82, 0.3, 14), accentMat); band.position.set(col.position.x, 3.2, col.position.z); boardGroup.add(band);
+    const col = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.8, HALL_H, 14), colMat); col.position.set(Math.cos(a) * r, HALL_H / 2, Math.sin(a) * r); col.castShadow = true; hall.add(col);
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.82, 0.82, 0.3, 14), accentMat); band.position.set(col.position.x, 3.2, col.position.z); hall.add(band);
   }
   const tankG = new THREE.MeshPhysicalMaterial({ color: '#8ff5df', transparent: true, opacity: 0.28, roughness: 0.08, clearcoat: 1 });
   const tankL = new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.5, toneMapped: false }); tankL.color = ACCENT;
@@ -302,123 +308,101 @@ export function buildBoard(groups, world, runtimeState) {
     const glass = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.2, 5, 20, 1, true), tankG); glass.position.y = 2.9; tg.add(glass);
     const liq = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.1, 3.6, 20), tankL); liq.position.y = 2.2; tg.add(liq);
     const cap = new THREE.Mesh(new THREE.CylinderGeometry(1.35, 1.35, 0.4, 20), colMat); cap.position.y = 5.5; tg.add(cap);
-    boardGroup.add(tg);
+    hall.add(tg);
   }
-  // catwalk along the back wall, overhead pipes, cable runs leading away from the room, lit ceiling panels
   const walkMat = createMaterial('#6f8790', 0.5, 0.5);
-  const walk = new THREE.Mesh(new THREE.BoxGeometry(46, 0.25, 3), walkMat); walk.position.set(0, 3.4, 30.5); boardGroup.add(walk);
-  const rail = new THREE.Mesh(new THREE.BoxGeometry(46, 0.08, 0.08), accentMat); rail.position.set(0, 4.5, 29.1); boardGroup.add(rail);
-  for (let i = -10; i <= 10; i++) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.2, 0.08), walkMat); post.position.set(i * 2.3, 3.95, 29.1); boardGroup.add(post); }
-  for (const z of [-20, -8, 8, 20]) { const pp = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, HALL * 2, 12), createMaterial('#c58a3c', 0.4, 0.6)); pp.rotation.z = Math.PI / 2; pp.position.set(0, 11.5, z); boardGroup.add(pp); }
+  const walk = new THREE.Mesh(new THREE.BoxGeometry(46, 0.25, 3), walkMat); walk.position.set(0, 3.4, 30.5); hall.add(walk);
+  const rail = new THREE.Mesh(new THREE.BoxGeometry(46, 0.08, 0.08), accentMat); rail.position.set(0, 4.5, 29.1); hall.add(rail);
+  for (let i = -10; i <= 10; i++) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.2, 0.08), walkMat); post.position.set(i * 2.3, 3.95, 29.1); hall.add(post); }
+  for (const z of [-20, -8, 8, 20]) { const pp = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, HALL * 2, 12), createMaterial('#c58a3c', 0.4, 0.6)); pp.rotation.z = Math.PI / 2; pp.position.set(0, 11.5, z); hall.add(pp); }
   const cableMat = createMaterial('#10171b', 0.8, 0.2);
   for (let i = 0; i < 8; i++) {
     const a = (i / 8) * Math.PI * 2 + 0.4, len = 22;
-    const cab = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.12, len), cableMat); cab.position.set(Math.sin(a) * (8 + len / 2), 0.0, Math.cos(a) * (8 + len / 2)); cab.rotation.y = a; boardGroup.add(cab);
+    const cab = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.12, len), cableMat); cab.position.set(Math.sin(a) * (8 + len / 2), 0.0, Math.cos(a) * (8 + len / 2)); cab.rotation.y = a; hall.add(cab);
   }
   for (const [lx, lz] of [[-18, -18], [18, -18], [-18, 18], [18, 18], [0, 0], [-24, 0], [24, 0], [0, -24], [0, 24]]) {
-    const lp = new THREE.Mesh(new THREE.BoxGeometry(5, 0.1, 2), lightPanelMat); lp.position.set(lx, HALL_H - 0.1, lz); boardGroup.add(lp);
+    const lp = new THREE.Mesh(new THREE.BoxGeometry(5, 0.1, 2), lightPanelMat); lp.position.set(lx, HALL_H - 0.1, lz); hall.add(lp);
   }
-  // exit pad beyond the door
-  if (door) {
-    const dp = gridToWorld(door[0], door[1]);
-    const out2 = new THREE.Mesh(new THREE.PlaneGeometry(3, 5), new THREE.MeshBasicMaterial({ map: T.arrow, color: '#7bffd0', transparent: true, opacity: 0.55, toneMapped: false }));
-    out2.rotation.x = -Math.PI / 2; out2.position.set(dp.x + (door[0] === edge ? 4 : door[0] === 0 ? -4 : 0), 0.02, dp.z + (door[1] === edge ? 4 : door[1] === 0 ? -4 : 0)); boardGroup.add(out2);
-  }
-  // ceiling (faces down, invisible from above) with four light panels
-  const ceiling = new THREE.Mesh(scalePlane(new THREE.PlaneGeometry(GRID_SIZE, GRID_SIZE), GRID_SIZE / 2, GRID_SIZE / 2), new THREE.MeshStandardMaterial({ map: T.panel, color: '#9fb0b6', roughness: 0.8 }));
+  // ceiling (faces down, invisible from above) with a grid of light panels
+  const ceiling = new THREE.Mesh(scalePlane(new THREE.PlaneGeometry(W, D), W / 2, D / 2), new THREE.MeshStandardMaterial({ map: T.panel, color: '#9fb0b6', roughness: 0.8 }));
   ceiling.rotation.x = Math.PI / 2; ceiling.position.y = ROOM_H; boardGroup.add(ceiling);
-  for (const [lx, lz] of [[-4, -6], [4, -6], [-4, 0], [4, 0], [-4, 6], [4, 6]].map(([a, b]) => [a * (HALF_GRID / 8), b * (HALF_GRID / 6)])) {
-    const lp = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.06, 1.0), lightPanelMat); lp.position.set(lx, ROOM_H - 0.04, lz); boardGroup.add(lp);
+  const lightsX = Math.max(2, Math.round(W / 6)), lightsZ = Math.max(2, Math.round(D / 5));
+  for (let i = 0; i < lightsX; i++) for (let j = 0; j < lightsZ; j++) {
+    const lp = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.06, 1.0), lightPanelMat);
+    lp.position.set(((i + 0.5) / lightsX - 0.5) * (W - 3), ROOM_H - 0.04, ((j + 0.5) / lightsZ - 0.5) * (D - 3)); boardGroup.add(lp);
   }
   // floor guide stripes along the base of every wall
-  for (const [sx, sz, w, d] of [[0, -(HALF_GRID - 0.65), GRID_SIZE - 2, 0.3], [0, HALF_GRID - 0.65, GRID_SIZE - 2, 0.3], [-(HALF_GRID - 0.65), 0, 0.3, GRID_SIZE - 2], [HALF_GRID - 0.65, 0, 0.3, GRID_SIZE - 2]]) {
+  for (const [sx, sz, w, d] of [[0, -(HALF_Z - 0.65), W - 2, 0.3], [0, HALF_Z - 0.65, W - 2, 0.3], [-(HALF_X - 0.65), 0, 0.3, D - 2], [HALF_X - 0.65, 0, 0.3, D - 2]]) {
     const st = new THREE.Mesh(scaleBoxUV(new THREE.BoxGeometry(w, 0.014, d), Math.max(w, d) * 1.5, 0.014, 1), stripeMat); st.position.set(sx, 0.007, sz); st.receiveShadow = true; boardGroup.add(st);
   }
-  // wall screens + vents (decoration only, kept in the wall plane)
+  // wall screens + vents (decoration only, kept in the wall plane, never in the gate's opening)
   const screenMat = new THREE.MeshBasicMaterial({ map: T.screen, color: '#ffffff', toneMapped: false });
   const grateMat = new THREE.MeshStandardMaterial({ map: T.grate, color: '#ffffff', roughness: 0.6, metalness: 0.5 });
   const frameMat = createMaterial('#1b262c', 0.4, 0.6);
+  const doorWorld = door ? gridToWorld(door[0], door[1]) : null;
   const deco = (kind, axis, side, along, y) => {
+    if (doorWorld && doorSide(door, W, D) === (axis === 'z' ? (side < 0 ? 'z0' : 'z1') : (side < 0 ? 'x0' : 'x1')) && Math.abs(along - (axis === 'z' ? doorWorld.x : doorWorld.z)) < 2.8) return;
     const g = new THREE.Group();
     const w = kind === 'screen' ? 1.7 : 1.0, h = kind === 'screen' ? 1.0 : 0.7;
     const frame = new THREE.Mesh(new THREE.BoxGeometry(w + 0.12, h + 0.12, 0.06), frameMat); g.add(frame);
     const face = new THREE.Mesh(new THREE.PlaneGeometry(w, h), kind === 'screen' ? screenMat : grateMat); face.position.z = 0.04; g.add(face);
-    const c = side * (HALF_GRID - 0.5) - side * 0.04;
+    const c = side * ((axis === 'z' ? HALF_Z : HALF_X) - 0.5) - side * 0.04;
     if (axis === 'z') { g.position.set(along, y, c); g.rotation.y = side < 0 ? 0 : Math.PI; } else { g.position.set(c, y, along); g.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2; }
     boardGroup.add(g);
   };
-  for (const a of [-6, -2, 2, 6]) { deco('screen', 'x', -1, a, 2.5); deco('screen', 'x', 1, a + 0.6, 2.5); }
-  deco('screen', 'z', 1, 3.6, 2.5);
-  for (const a of [-4, 0, 4]) { deco('vent', 'x', -1, a + 0.1, 1.3); deco('vent', 'x', 1, a + 0.2, 1.3); } deco('vent', 'z', 1, -3.8, 1.3);
+  for (const [axis, side] of [['z', -1], ['z', 1], ['x', -1], ['x', 1]]) {
+    const len = axis === 'z' ? W : D;
+    let n = 0;
+    for (let a = -len / 2 + 3; a < len / 2 - 2; a += 4.4, n++) {
+      deco(n % 3 === 1 ? 'vent' : 'screen', axis, side, a + (side > 0 ? 0.6 : 0), n % 3 === 1 ? 1.3 : 2.5);
+    }
+  }
 
-  // ── Liquids: acid, water and ice are one continuous surface, not discs ──
-  // A single world-space shader draws the cartoon "cracked cell" pattern, so neighbouring cells join seamlessly,
-  // and a per-instance neighbour mask gives every pool a soft, wobbling shoreline.
-  const LIQUID = {
-    acid: { base: '#7bd92a', deep: '#3f9a12', line: '#e3ff7e', rim: '#244d0c', speed: 0.55, scale: 1.25, glow: 0.35 },
-    water: { base: '#2f93f2', deep: '#1c62c4', line: '#b6e4ff', rim: '#e9f8ff', speed: 0.4, scale: 1.05, glow: 0.0 },
-    ice: { base: '#bfe8f4', deep: '#8cc8dc', line: '#ffffff', rim: '#e8fbff', speed: 0.0, scale: 0.8, glow: 0.0 },
-  };
-  const liquidVert = `
-    attribute vec4 aEdge; varying vec2 vUv; varying vec4 vEdge; varying vec2 vWorld;
-    void main() { vUv = uv; vEdge = aEdge; vec4 wp = modelMatrix * instanceMatrix * vec4(position, 1.0); vWorld = wp.xz; gl_Position = projectionMatrix * viewMatrix * wp; }`;
-  const liquidFrag = `
-    uniform float time, speed, scale, glow; uniform vec3 base, deep, line, rim;
-    varying vec2 vUv; varying vec4 vEdge; varying vec2 vWorld;
-    vec2 hash2(vec2 p) { p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3))); return fract(sin(p) * 43758.5453); }
-    float hash1(vec2 p) { return fract(sin(dot(p, vec2(41.3, 289.1))) * 43758.5453); }
-    float vnoise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f); return mix(mix(hash1(i), hash1(i + vec2(1, 0)), f.x), mix(hash1(i + vec2(0, 1)), hash1(i + vec2(1, 1)), f.x), f.y); }
-    void main() {
-      vec2 p = vWorld * scale; vec2 ip = floor(p), fp = fract(p);
-      float f1 = 8.0, f2 = 8.0;
-      for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
-        vec2 g = vec2(float(i), float(j)); vec2 o = hash2(ip + g);
-        o = 0.5 + 0.5 * sin(time * speed + 6.2831 * o);
-        float d = length(g + o - fp);
-        if (d < f1) { f2 = f1; f1 = d; } else if (d < f2) f2 = d;
-      }
-      float cell = smoothstep(0.0, 0.11, f2 - f1);                 // 0 on the cracks, 1 inside a cell
-      vec3 col = mix(line, mix(deep, base, 0.55 + 0.45 * vnoise(p * 1.7 + time * speed * 0.4)), cell);
-      // shoreline: distance to the nearest side that has no neighbouring liquid cell, wobbled by noise
-      vec2 uv = vUv;
-      float d = 1.0;
-      d = min(d, mix(uv.x, 1.0, vEdge.x));
-      d = min(d, mix(1.0 - uv.x, 1.0, vEdge.y));
-      d = min(d, mix(uv.y, 1.0, vEdge.z));
-      d = min(d, mix(1.0 - uv.y, 1.0, vEdge.w));
-      d += (vnoise(vWorld * 3.1) - 0.5) * 0.16;
-      float inside = smoothstep(0.0, 0.05, d);
-      float rimBand = 1.0 - smoothstep(0.05, 0.2, d);
-      col = mix(col, rim, rimBand * 0.85);
-      col += glow * pow(cell, 2.0) * 0.25;
-      if (inside < 0.02) discard;
-      gl_FragColor = vec4(col, 1.0);
-    }`;
-  const liquidMats = [];
+  // ── Liquids: acid, water and ice are one continuous, moving surface (see liquid.js) ──
+  const SUN_DIR = new THREE.Vector3(-8, 14, 7).normalize();
   const addPools = (cells, kind) => {
     if (!cells.length) return;
     const cfg = LIQUID[kind];
     const has = new Set(cells.map((c) => `${c[0]},${c[1]}`));
     const N = (x, z) => (has.has(`${x},${z}`) ? 1 : 0);
+    const uniforms = { time: { value: 0 }, uPlayer: { value: new THREE.Vector3(0, 0, 0) }, uSun: { value: SUN_DIR.clone() } };
+    for (const k of ['speed', 'scale', 'glow', 'wave', 'waveSpeed', 'spec', 'specPow', 'bubbles', 'flow', 'alpha', 'foam', 'ripple', 'veins']) uniforms[k] = { value: cfg[k] };
+    for (const k of ['base', 'deep', 'line', 'rim', 'sky']) uniforms[k] = { value: new THREE.Color(cfg[k]) };
     const mat = new THREE.ShaderMaterial({
-      vertexShader: liquidVert, fragmentShader: liquidFrag, transparent: false, side: THREE.DoubleSide,
-      uniforms: { time: { value: 0 }, speed: { value: cfg.speed }, scale: { value: cfg.scale }, glow: { value: cfg.glow }, base: { value: new THREE.Color(cfg.base) }, deep: { value: new THREE.Color(cfg.deep) }, line: { value: new THREE.Color(cfg.line) }, rim: { value: new THREE.Color(cfg.rim) } },
+      vertexShader: liquidVertex, fragmentShader: liquidFragment, transparent: cfg.alpha < 1, depthWrite: cfg.alpha >= 1, side: THREE.DoubleSide, uniforms,
     });
-    const geo = new THREE.PlaneGeometry(1.0, 1.0);
-    const edge = new Float32Array(cells.length * 4);
-    cells.forEach((c, i) => { edge.set([N(c[0] - 1, c[1]), N(c[0] + 1, c[1]), N(c[0], c[1] - 1), N(c[0], c[1] + 1)], i * 4); });
-    geo.setAttribute('aEdge', new THREE.InstancedBufferAttribute(edge, 4));
+    const geo = cfg.wave > 0 ? new THREE.PlaneGeometry(1.0, 1.0, 6, 6) : new THREE.PlaneGeometry(1.0, 1.0);
+    const edgeBuf = new Float32Array(cells.length * 4);
+    cells.forEach((c, i) => { edgeBuf.set([N(c[0] - 1, c[1]), N(c[0] + 1, c[1]), N(c[0], c[1] - 1), N(c[0], c[1] + 1)], i * 4); });
+    geo.setAttribute('aEdge', new THREE.InstancedBufferAttribute(edgeBuf, 4));
     const mesh = new THREE.InstancedMesh(geo, mat, cells.length);
     const d = new THREE.Object3D();
-    cells.forEach((c, i) => { const { x, z } = gridToWorld(c[0], c[1]); d.position.set(x, kind === 'ice' ? 0.012 : 0.008, z); d.rotation.set(-Math.PI / 2, 0, 0); d.scale.set(1.002, 1.002, 1); d.updateMatrix(); mesh.setMatrixAt(i, d.matrix); });
+    cells.forEach((c, i) => { const { x, z } = gridToWorld(c[0], c[1]); d.position.set(x, kind === 'ice' ? 0.012 : 0.03, z); d.rotation.set(-Math.PI / 2, 0, 0); d.scale.set(1.002, 1.002, 1); d.updateMatrix(); mesh.setMatrixAt(i, d.matrix); });
     mesh.frustumCulled = false; mesh.renderOrder = 2; boardGroup.add(mesh);
-    updaters.push((t) => { mat.uniforms.time.value = t; });
-    if (kind !== 'ice') {
-      const bubbles = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ color: kind === 'acid' ? '#e9ffb0' : '#ffffff', size: kind === 'acid' ? 0.09 : 0.06, transparent: true, opacity: 0.8, depthWrite: false }));
-      const pts = new Float32Array(cells.length * 3 * 3);
-      cells.forEach((c, i) => { const { x, z } = gridToWorld(c[0], c[1]); for (let k = 0; k < 3; k++) { pts[(i * 3 + k) * 3] = x + (Math.random() - 0.5) * 0.8; pts[(i * 3 + k) * 3 + 1] = 0.05; pts[(i * 3 + k) * 3 + 2] = z + (Math.random() - 0.5) * 0.8; } });
-      bubbles.geometry.setAttribute('position', new THREE.BufferAttribute(pts, 3)); bubbles.frustumCulled = false; boardGroup.add(bubbles);
-      updaters.push((t) => { bubbles.material.opacity = 0.3 + Math.abs(Math.sin(t * 2.1)) * 0.6; });
+    updaters.push((t, ctx) => {
+      uniforms.time.value = t;
+      const pl = ctx.player;
+      if (pl && cfg.ripple > 0) {
+        const near = has.has(`${Math.round(pl.x + HALF_X)},${Math.round(pl.z + HALF_Z)}`) && (pl.feet ?? 0) < 0.4;
+        uniforms.uPlayer.value.set(pl.x, pl.z, near ? Math.min(1, 0.35 + (pl.speed || 0) * 0.14) : 0);
+      }
+    });
+    if (kind === 'acid') {
+      // pale vapour curling off the acid
+      const per = 3, n = cells.length * per;
+      const pts = new Float32Array(n * 3), cols = new Float32Array(n * 3), seed = [];
+      cells.forEach((c, i) => { const { x, z } = gridToWorld(c[0], c[1]); for (let k = 0; k < per; k++) seed.push({ x: x + (Math.random() - 0.5) * 0.9, z: z + (Math.random() - 0.5) * 0.9, p: Math.random(), s: 0.12 + Math.random() * 0.16 }); });
+      const steam = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ size: 0.2, vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, map: T.soft }));
+      steam.geometry.setAttribute('position', new THREE.BufferAttribute(pts, 3)); steam.geometry.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+      steam.frustumCulled = false; boardGroup.add(steam);
+      updaters.push((t) => {
+        for (let i = 0; i < n; i++) {
+          const s = seed[i], life = (t * s.s + s.p) % 1;
+          pts[i * 3] = s.x + Math.sin(t * 0.8 + s.p * 9) * 0.12 * life; pts[i * 3 + 1] = 0.06 + life * 1.1; pts[i * 3 + 2] = s.z + Math.cos(t * 0.7 + s.p * 7) * 0.12 * life;
+          const f = Math.sin(life * Math.PI) * 0.22; cols[i * 3] = 0.55 * f; cols[i * 3 + 1] = 0.95 * f; cols[i * 3 + 2] = 0.3 * f;
+        }
+        steam.geometry.attributes.position.needsUpdate = true; steam.geometry.attributes.color.needsUpdate = true;
+      });
     }
   };
   addPools(world.hazards || [], 'acid');
@@ -430,7 +414,7 @@ export function buildBoard(groups, world, runtimeState) {
   for (const r of mergeCells(walls, (c) => { const p = getObjectProperties(world, 'wall', c); return `${p.height}|${p.color}`; })) {
     const props = getObjectProperties(world, 'wall', r.cell);
     const w = r.x1 - r.x0 + 1, d = r.z1 - r.z0 + 1, h = props.height;
-    const cx = (r.x0 + r.x1) / 2 - HALF_GRID, cz = (r.z0 + r.z1) / 2 - HALF_GRID;
+    const cx = (r.x0 + r.x1) / 2 - HALF_X, cz = (r.z0 + r.z1) / 2 - HALF_Z;
     const body = new THREE.Mesh(scaleBoxUV(new THREE.BoxGeometry(w, h, d), w, h, d), new THREE.MeshStandardMaterial({ map: T.panel, color: props.color, roughness: 0.6, metalness: 0.3 }));
     body.position.set(cx, h / 2, cz); body.castShadow = body.receiveShadow = true; body.userData = { kind: 'wall', cell: r.cell };
     objectsGroup.add(body); out.occluders.push(body); out.floorTargets.push(body);
@@ -442,7 +426,7 @@ export function buildBoard(groups, world, runtimeState) {
   for (const r of mergeCells(world.platforms || [], (c) => { const p = getObjectProperties(world, 'platform', c); return `${p.height}|${p.color}`; })) {
     const props = getObjectProperties(world, 'platform', r.cell);
     const w = r.x1 - r.x0 + 1, d = r.z1 - r.z0 + 1, h = props.height;
-    const cx = (r.x0 + r.x1) / 2 - HALF_GRID, cz = (r.z0 + r.z1) / 2 - HALF_GRID;
+    const cx = (r.x0 + r.x1) / 2 - HALF_X, cz = (r.z0 + r.z1) / 2 - HALF_Z;
     const body = new THREE.Mesh(scaleBoxUV(new THREE.BoxGeometry(w, h, d), w, h, d), new THREE.MeshStandardMaterial({ map: T.panel, color: '#a9b8c0', roughness: 0.6, metalness: 0.3 }));
     body.position.set(cx, h / 2, cz); body.castShadow = body.receiveShadow = true; body.userData = { kind: 'platform', cell: r.cell };
     objectsGroup.add(body); out.occluders.push(body); out.floorTargets.push(body);
@@ -485,7 +469,7 @@ export function buildBoard(groups, world, runtimeState) {
     objectsGroup.add(holder);
     // tracks showing the sweep range
     const railMat = new THREE.MeshBasicMaterial({ color: '#ff9db5', transparent: true, opacity: 0.4 });
-    const gx = spec.cx - HALF_GRID, gz = spec.cz - HALF_GRID;
+    const gx = spec.cx - HALF_X, gz = spec.cz - HALF_Z;
     const ends = spec.beam === 'y' ? [0] : [-len / 2, len / 2];
     for (const e of ends) {
       const ox = spec.beam === 'x' ? e : 0, oz = spec.beam === 'z' ? e : 0;
@@ -501,7 +485,7 @@ export function buildBoard(groups, world, runtimeState) {
     updaters.push((t, ctx) => {
       const c = laserCenter(entry, i, ctx.sim);
       holder.visible = !ctx.channelOff?.('laser', entry);
-      holder.position.set(c.px - HALF_GRID, c.beam === 'y' ? c.y + c.half : c.by, c.pz - HALF_GRID);
+      holder.position.set(c.px - HALF_X, c.beam === 'y' ? c.y + c.half : c.by, c.pz - HALF_Z);
       beamMat.opacity = item.frozen ? 0.3 : 0.82 + Math.sin(t * 18 + i) * 0.1; beamMat.color.set(item.frozen ? '#9fe8ff' : '#ff3b6b');
       haloMat.opacity = item.frozen ? 0.05 : 0.18 + Math.sin(t * 9) * 0.05;
     });
@@ -512,7 +496,7 @@ export function buildBoard(groups, world, runtimeState) {
   const SHOCK_LIME = new THREE.Color('#b6ff5a'), SHOCK_CORE = new THREE.Color('#f6ffe0'), SHOCK_WARN = new THREE.Color('#ffd23a');
   (world.shocks || []).forEach((entry, i) => {
     const s = shockSpec(entry);
-    const wx = s.x - HALF_GRID, wz = s.z - HALF_GRID;
+    const wx = s.x - HALF_X, wz = s.z - HALF_Z;
     const dv = new THREE.Vector3(...DIRS[s.dir]);
     const root = new THREE.Group(); root.position.set(wx, s.y, wz); objectsGroup.add(root);
     const aim = new THREE.Group(); aim.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dv); root.add(aim);
@@ -537,22 +521,38 @@ export function buildBoard(groups, world, runtimeState) {
     if (s.dir === 'up') pad.rotation.x = Math.PI;
     if (s.dir !== 'down' && s.dir !== 'up') pad.position.y = 0.03;
     objectsGroup.add(pad);
-    // the bolt itself: three jittering polylines (core + two thick halos) plus short side arcs
+    // The bolt itself: three nested jittering ribbons (a white-hot core inside two thick lime glows).  Each is a pair of
+    // crossed quads along the same jagged path, so it reads as a fat bolt from every camera angle – no shell around it.
     const N = 16;
-    const mkLine = (color, opacity) => { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3)); const l = new THREE.Line(g, new THREE.LineBasicMaterial({ color, transparent: true, opacity, toneMapped: false, depthWrite: false })); l.frustumCulled = false; aim.add(l); return l; };
-    const bolts = [mkLine('#f6ffe0', 0), mkLine('#b6ff5a', 0), mkLine('#b6ff5a', 0)];
+    const mkBolt = (width, color, opacity) => {
+      const geo = new THREE.BufferGeometry();
+      const verts = new Float32Array(2 * N * 2 * 3), index = [];
+      for (let r = 0; r < 2; r++) for (let k = 0; k < N - 1; k++) { const i = (r * N + k) * 2; index.push(i, i + 1, i + 2, i + 1, i + 3, i + 2); }
+      geo.setIndex(index); geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+      const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
+      mesh.frustumCulled = false; aim.add(mesh);
+      return { mesh, verts, geo, width };
+    };
+    const bolts = [mkBolt(0.1, '#f6ffe0', 0), mkBolt(0.3, '#b6ff5a', 0), mkBolt(0.62, '#8dff3a', 0)];
     const arcs = Array.from({ length: 7 }, () => { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(4 * 3), 3)); const l = new THREE.Line(g, new THREE.LineBasicMaterial({ color: '#d9ff9a', transparent: true, opacity: 0, toneMapped: false, depthWrite: false })); l.frustumCulled = false; aim.add(l); return l; });
-    const colMat = new THREE.MeshBasicMaterial({ color: '#9dff5a', transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
-    const column = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.3, L, 10, 1, true), colMat); column.position.y = 0.3 + L / 2; aim.add(column);
     const item = { index: i, entry, pos: { x: wx, z: wz }, striking: false, charging: false };
     out.shockMeshes.push(item);
-    const jag = (line, spread) => {
-      const a = line.geometry.attributes.position;
-      for (let k = 0; k < N; k++) { const f = k / (N - 1), mid = k && k < N - 1; a.setXYZ(k, mid ? (Math.random() - 0.5) * spread : 0, 0.3 + f * L, mid ? (Math.random() - 0.5) * spread : 0); }
-      a.needsUpdate = true;
+    const path = Array.from({ length: N }, () => [0, 0]);
+    const rejag = (spread, pulse) => {
+      for (let k = 0; k < N; k++) { const mid = k > 0 && k < N - 1; path[k][0] = mid ? (Math.random() - 0.5) * spread : 0; path[k][1] = mid ? (Math.random() - 0.5) * spread : 0; }
+      for (const b of bolts) {
+        const w = b.width * pulse, v = b.verts;
+        for (let r = 0; r < 2; r++) for (let k = 0; k < N; k++) {
+          const f = k / (N - 1), y = 0.3 + f * L, taper = 0.55 + 0.45 * Math.sin(f * Math.PI), x = path[k][0] * (b.width > 0.2 ? 1 : 0.45), zz = path[k][1] * (b.width > 0.2 ? 1 : 0.45);
+          const o = (r * N + k) * 2 * 3, hw = (w * taper) / 2;
+          v[o] = x - (r === 0 ? hw : 0); v[o + 1] = y; v[o + 2] = zz - (r === 1 ? hw : 0);
+          v[o + 3] = x + (r === 0 ? hw : 0); v[o + 4] = y; v[o + 5] = zz + (r === 1 ? hw : 0);
+        }
+        b.geo.attributes.position.needsUpdate = true;
+      }
     };
-    const arc = (line) => {
-      const a = line.geometry.attributes.position, y0 = 0.3 + Math.random() * L, ang = Math.random() * 6.283, len = 0.5 + Math.random() * 1.0;
+    const arc = (line, near) => {
+      const a = line.geometry.attributes.position, y0 = near ? 0.3 + Math.random() * Math.min(1.0, L) : 0.3 + Math.random() * L, ang = Math.random() * 6.283, len = 0.5 + Math.random() * 1.0;
       let x = 0, z = 0, y = y0;
       for (let k = 0; k < 4; k++) { a.setXYZ(k, x, y, z); x += Math.cos(ang) * len / 3 + (Math.random() - 0.5) * 0.25; z += Math.sin(ang) * len / 3 + (Math.random() - 0.5) * 0.25; y += (Math.random() - 0.5) * 0.3; }
       a.needsUpdate = true;
@@ -562,10 +562,12 @@ export function buildBoard(groups, world, runtimeState) {
       const ph = off ? 0 : shockPhase(entry, i, ctx.sim);
       item.striking = ph >= SHOCK_STRIKE_AT; item.charging = !item.striking && ph >= SHOCK_CHARGE_AT;
       crystalMat.color.set(off ? '#4a5a48' : item.striking ? '#eaffc8' : item.charging ? '#ffd23a' : '#7dff6a');
-      colMat.opacity = item.striking ? 0.4 : item.charging ? 0.05 + Math.abs(Math.sin(t * 22)) * 0.07 : 0;
-      colMat.color.copy(item.charging ? SHOCK_WARN : SHOCK_LIME);
-      bolts[0].material.opacity = item.striking ? 1 : 0; bolts[1].material.opacity = item.striking ? 0.7 : 0; bolts[2].material.opacity = item.striking ? 0.5 : 0;
-      if (item.striking) { jag(bolts[0], 0.22); jag(bolts[1], 0.5); jag(bolts[2], 0.5); arcs.forEach((l, k) => { l.material.opacity = Math.random() > 0.35 ? 0.8 : 0; arc(l); }); } else arcs.forEach((l) => { l.material.opacity = 0; });
+      const o = item.striking ? [1, 0.85, 0.5] : [0, 0, 0];
+      bolts.forEach((b, k) => { b.mesh.material.opacity = o[k]; b.mesh.visible = item.striking; });
+      if (item.striking) rejag(0.55, 0.8 + Math.random() * 0.45);
+      if (item.striking) arcs.forEach((l) => { l.material.opacity = Math.random() > 0.35 ? 0.85 : 0; arc(l, false); });
+      else if (item.charging) arcs.forEach((l, k) => { const on = k < 3 && Math.random() > 0.6; l.material.opacity = on ? 0.7 : 0; if (on) arc(l, true); });
+      else arcs.forEach((l) => { l.material.opacity = 0; });
       padGlowMat.opacity = item.striking ? 0.95 : item.charging ? 0.2 + Math.abs(Math.sin(t * 16)) * 0.5 : 0;
       padRingMat.color.set(item.striking ? '#d6ff9a' : item.charging ? '#ffd23a' : off ? '#26332a' : '#3f6a38');
       tip.scale.setScalar(item.striking ? 1.9 : item.charging ? 1.1 + Math.sin(t * 40) * 0.3 : 0.8);
@@ -589,7 +591,7 @@ export function buildBoard(groups, world, runtimeState) {
     }
     const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.1, 14), createMaterial('#d4552e', 0.35, 0.5)); spin.add(hub);
     holder.traverse((n) => { if (n.isMesh) n.castShadow = true; });
-    const gx = c.x - HALF_GRID, gz = c.z - HALF_GRID, len = c.range * 2 + 0.5;
+    const gx = c.x - HALF_X, gz = c.z - HALF_Z, len = c.range * 2 + 0.5;
     const groove = new THREE.Mesh(scaleBoxUV(new THREE.BoxGeometry(c.axis === 'x' ? len : 0.22, 0.02, c.axis === 'z' ? len : 0.22), len * 1.5, 0.02, 0.5), stripeMat);
     groove.position.set(gx, 0.012, gz); objectsGroup.add(groove);
     const item = { index: i, holder, spin, spec: c };
@@ -597,7 +599,7 @@ export function buildBoard(groups, world, runtimeState) {
     updaters.push((t, ctx) => {
       const p = cutterPosition(entry, i, ctx.sim);
       holder.visible = !ctx.channelOff?.('cutter', entry);
-      holder.position.set(p.px - HALF_GRID, c.radius, p.pz - HALF_GRID);
+      holder.position.set(p.px - HALF_X, c.radius, p.pz - HALF_Z);
       spin.rotation.y = ctx.frozen ? spin.rotation.y : t * 14 * (i % 2 ? -1 : 1);
     });
   });
@@ -768,29 +770,60 @@ export function buildBoard(groups, world, runtimeState) {
     updaters.push((t) => { beam.material.emissiveIntensity = 0.4 + (Math.sin(t * 3.1 + i) + 1) * 0.2; });
   });
 
-  // ── Exit gate ──
+  // ── Exit gate: a framed airlock in the outer wall – two sliding panels, status lamp, EXIT sign, lit threshold ──
+  // Built in the gate's own frame: +x runs along the wall, +z points into the room, the wall plane is at z = 0.5.
   if (door) {
+    const sideName = doorSide(door, W, D);
     const { x, z } = gridToWorld(door[0], door[1]);
     const grp = new THREE.Group(); grp.position.set(x, 0, z);
-    if (door[0] === 0 || door[0] === edge) grp.rotation.y = Math.PI / 2;
-    const stone = createMaterial('#b8c0cc', 0.8, 0.1);
-    const half = EXIT_OPENING_WIDTH / 2;
-    for (const s of [-1, 1]) { const pillar = new THREE.Mesh(new RoundedBoxGeometry(0.38, 3.2, 0.5, 3, 0.06), stone); pillar.position.set(s * (half + 0.12), 1.6, 0); pillar.castShadow = true; grp.add(pillar); }
-    const lintel = new THREE.Mesh(new RoundedBoxGeometry(EXIT_OPENING_WIDTH + 1.0, 0.4, 0.5, 3, 0.06), stone); lintel.position.set(0, 3.3, 0); lintel.castShadow = true; grp.add(lintel);
-    const sign = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.04, 8, 24), new THREE.MeshBasicMaterial({ color: '#7fffd0', toneMapped: false })); sign.position.set(0, 3.3, 0.27); grp.add(sign);
-    const panelMat = new THREE.MeshStandardMaterial({ color: doorsOpen ? '#77bd91' : '#56636a', roughness: 0.3, metalness: 0.2, transparent: true, opacity: 0.86, emissive: '#27d6a8', emissiveIntensity: 0.15 });
-    const panel = new THREE.Mesh(new THREE.BoxGeometry(EXIT_OPENING_WIDTH * 0.8, 2.6, 0.16), panelMat); panel.position.set(0, 1.3, 0); panel.castShadow = true; grp.add(panel);
-    const exitGlow = new THREE.Mesh(new THREE.PlaneGeometry(4.5, 4.5), new THREE.MeshBasicMaterial({ map: T.soft, color: '#7fffd0', transparent: true, opacity: 0.2, depthWrite: false, blending: THREE.AdditiveBlending })); exitGlow.rotation.x = -Math.PI / 2; exitGlow.position.set(0, 0.02, 0.8); grp.add(exitGlow);
+    grp.rotation.y = sideName === 'z1' ? Math.PI : sideName === 'z0' ? 0 : sideName === 'x0' ? Math.PI / 2 : -Math.PI / 2;
+    const half = DOOR_CLEAR / 2;
+    const frameMat = new THREE.MeshStandardMaterial({ color: '#cfdadd', roughness: 0.4, metalness: 0.35 });
+    const steel = new THREE.MeshStandardMaterial({ color: '#5f7078', roughness: 0.35, metalness: 0.75 });
+    for (const s of [-1, 1]) {
+      const pillar = new THREE.Mesh(new RoundedBoxGeometry(0.3, 3.4, 1.0, 3, 0.05), frameMat); pillar.position.set(s * (half + 0.15), 1.7, 0); pillar.castShadow = pillar.receiveShadow = true; grp.add(pillar);
+      const band = new THREE.Mesh(scaleBoxUV(new THREE.BoxGeometry(0.31, 0.5, 1.02), 1, 1, 1), stripeMat); band.position.set(s * (half + 0.15), 0.25, 0); grp.add(band);
+    }
+    const header = new THREE.Mesh(new RoundedBoxGeometry(DOOR_SPAN + 0.1, ROOM_H - 3.4, 1.0, 3, 0.05), frameMat); header.position.set(0, 3.4 + (ROOM_H - 3.4) / 2, 0); header.castShadow = true; grp.add(header);
+    const signMat = new THREE.MeshBasicMaterial({ map: T.exitSign, toneMapped: false });
+    const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 0.5), signMat); sign.position.set(0, 4.0, 0.51); grp.add(sign);
+    const lampMat = new THREE.MeshBasicMaterial({ color: '#ff5a4e', toneMapped: false });
+    const lamp = new THREE.Mesh(new THREE.BoxGeometry(DOOR_CLEAR, 0.07, 0.07), lampMat); lamp.position.set(0, 3.33, 0.42); grp.add(lamp);
+    const sideLights = [-1, 1].map((s) => { const m = new THREE.Mesh(new THREE.BoxGeometry(0.05, 2.6, 0.05), new THREE.MeshBasicMaterial({ color: '#ff5a4e', toneMapped: false })); m.position.set(s * (half + 0.01), 1.7, 0.45); grp.add(m); return m; });
+    const makePanel = (s) => {
+      const p = new THREE.Group();
+      const slab = new THREE.Mesh(new RoundedBoxGeometry(DOOR_CLEAR / 2, 3.38, 0.16, 2, 0.03), steel); slab.castShadow = true; p.add(slab);
+      const slit = new THREE.Mesh(new THREE.PlaneGeometry(0.16, 1.5), new THREE.MeshBasicMaterial({ color: '#7bffd0', toneMapped: false })); slit.position.set(-s * 0.3, 0.55, 0.085); p.add(slit);
+      const edge = new THREE.Mesh(scaleBoxUV(new THREE.BoxGeometry(0.1, 3.38, 0.17), 1, 6, 1), stripeMat); edge.position.set(-s * (DOOR_CLEAR / 4 - 0.05), 0, 0); p.add(edge);
+      p.position.set(s * DOOR_CLEAR / 4, 1.7, 0); grp.add(p); return p;
+    };
+    const panelL = makePanel(-1), panelR = makePanel(1);
+    const threshold = new THREE.Mesh(scaleBoxUV(new THREE.BoxGeometry(DOOR_CLEAR, 0.02, 1.0), 4, 1, 2), stripeMat); threshold.position.set(0, 0.012, 0); grp.add(threshold);
+    const pad = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 4.2), new THREE.MeshBasicMaterial({ map: T.arrow, color: '#7bffd0', transparent: true, opacity: 0.5, toneMapped: false }));
+    pad.rotation.x = -Math.PI / 2; pad.position.set(0, 0.02, -3.0); grp.add(pad);
+    const exitGlow = new THREE.Mesh(new THREE.PlaneGeometry(5, 5), new THREE.MeshBasicMaterial({ map: T.soft, color: '#7fffd0', transparent: true, opacity: 0.2, depthWrite: false, blending: THREE.AdditiveBlending }));
+    exitGlow.rotation.x = -Math.PI / 2; exitGlow.position.set(0, 0.03, -1.6); grp.add(exitGlow);
     objectsGroup.add(grp);
-    out.exitDoorMesh = panel; out.exitDoorGroup = grp; panel.userData.kind = 'exitDoor';
-    updaters.push((t, ctx) => { panelMat.emissiveIntensity = ctx.doorsOpen ? 0.6 + Math.sin(t * 3) * 0.2 : 0.1; exitGlow.material.opacity = ctx.doorsOpen ? 0.35 + Math.sin(t * 3) * 0.1 : 0.12; sign.scale.setScalar(1 + Math.sin(t * 3) * 0.1); });
+    const slideMax = DOOR_CLEAR / 2 + 0.1;
+    grp.userData.setProgress = (p) => { panelL.position.x = -(DOOR_CLEAR / 4 + p * slideMax); panelR.position.x = DOOR_CLEAR / 4 + p * slideMax; };
+    grp.userData.setProgress(doorsOpen ? 1 : 0);
+    out.door = { group: grp };
+    out.exitDoorMesh = lamp; out.exitDoorGroup = grp; lamp.userData.kind = 'exitDoor';
+    const OPEN = new THREE.Color('#55ff9a'), SHUT = new THREE.Color('#ff5a4e');
+    updaters.push((t, ctx) => {
+      const col = ctx.doorsOpen ? OPEN : SHUT;
+      lampMat.color.copy(col); for (const m of sideLights) m.material.color.copy(col);
+      signMat.color.setScalar(ctx.doorsOpen ? 1.0 + Math.sin(t * 3) * 0.12 : 0.55);
+      exitGlow.material.opacity = ctx.doorsOpen ? 0.35 + Math.sin(t * 3) * 0.1 : 0.1;
+      pad.material.opacity = ctx.doorsOpen ? 0.55 : 0.2;
+    });
   }
 
   // ── Lab props: a few consoles and canisters standing against the walls, kept clear of play cells ──
   const rng = mulberry(hashString(world.name || 'level'));
   const propMat = createMaterial('#3b4a53', 0.5, 0.5), tankGlass = new THREE.MeshPhysicalMaterial({ color: '#7cf0d8', transparent: true, opacity: 0.35, roughness: 0.1, metalness: 0, clearcoat: 1 });
   const tankLiquid = new THREE.MeshBasicMaterial({ color: ACCENT, transparent: true, opacity: 0.55, toneMapped: false }); tankLiquid.color = ACCENT;
-  for (const [px, pz] of [[-(HALF_GRID - 0.9), -(HALF_GRID - 0.9)], [HALF_GRID - 0.9, -(HALF_GRID - 0.9)], [-(HALF_GRID - 0.9), HALF_GRID - 0.9]]) {
+  for (const [px, pz] of [[-(HALF_X - 0.9), -(HALF_Z - 0.9)], [HALF_X - 0.9, -(HALF_Z - 0.9)], [-(HALF_X - 0.9), HALF_Z - 0.9]]) {
     if (door && Math.hypot(px - gridToWorld(door[0], door[1]).x, pz - gridToWorld(door[0], door[1]).z) < 2.6) continue;
     const tank = new THREE.Group(); tank.position.set(px, 0, pz);
     const base = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.34, 0.16, 16), propMat); base.position.y = 0.08; tank.add(base);

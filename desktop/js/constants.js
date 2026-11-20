@@ -6,9 +6,46 @@
  * `python -m backend.tools.gen_levels`, so the 3D game and the RL environment always agree.
  */
 
-export const GRID_SIZE = 17;
+export const GRID_SIZE = 17;               // default room size (levels may be any width x depth, see worldDims)
 export const HALF_GRID = (GRID_SIZE - 1) / 2;
-export const EXIT_OPENING_WIDTH = 1.5;
+export const MIN_GRID = 9;
+export const MAX_GRID = 41;
+export const EXIT_OPENING_WIDTH = 1.5;     // legacy
+export const DOOR_SPAN = 3;                // the exit gate fills 3 wall cells
+export const DOOR_CLEAR = 2.4;             // clear width between the gate pillars (metres)
+
+// The room being played / edited.  Live bindings: every importer sees the new values after setActiveGrid().
+export let GRID_W = GRID_SIZE;
+export let GRID_D = GRID_SIZE;
+export let HALF_X = HALF_GRID;
+export let HALF_Z = HALF_GRID;
+export function worldDims(world) {
+  const legacy = Number(world?.size) || GRID_SIZE;
+  const clampDim = (v) => Math.max(MIN_GRID, Math.min(MAX_GRID, Math.round(Number(v) || legacy)));
+  return { w: clampDim(world?.width), d: clampDim(world?.depth) };
+}
+export function setActiveGrid(w, d) {
+  GRID_W = w; GRID_D = d; HALF_X = (w - 1) / 2; HALF_Z = (d - 1) / 2;
+}
+export function activateWorld(world) { const { w, d } = worldDims(world); setActiveGrid(w, d); return { w, d }; }
+
+/** Which wall is the door on, and where along it?  side: 'z1' (far), 'z0', 'x1', 'x0'. */
+export function doorSide(door, w = GRID_W, d = GRID_D) {
+  if (!door) return null;
+  if (door[1] === d - 1) return 'z1';
+  if (door[1] === 0) return 'z0';
+  if (door[0] === w - 1) return 'x1';
+  if (door[0] === 0) return 'x0';
+  return null;
+}
+/** Move a stray door to the nearest wall, clear of the corners (a gate needs 3 wall cells). */
+export function snapDoorToWall(door, w, d) {
+  const [x, z] = door;
+  const gaps = { x0: x, x1: w - 1 - x, z0: z, z1: d - 1 - z };
+  const side = Object.keys(gaps).reduce((a, b) => (gaps[b] < gaps[a] ? b : a));
+  const cx = Math.max(2, Math.min(w - 3, x)), cz = Math.max(2, Math.min(d - 3, z));
+  return side === 'x0' ? [0, cz] : side === 'x1' ? [w - 1, cz] : side === 'z0' ? [cx, 0] : [cx, d - 1];
+}
 export const LEVEL_TIME_LIMIT_SECONDS = 45;
 export const RL_ACTION_DURATION_SECONDS = 0.32;
 export const SAVE_KEY = 'the-real-exit-levels-v3';
@@ -178,6 +215,11 @@ const RESIZABLE = [['walls', 'wall'], ['platforms', 'platform'], ['hazards', 'ha
 
 /** Upgrade a Skyway-era level in place (movingLasers -> lasers, fixed lasers dropped, electricBarriers -> shocks). */
 export function migrateLevel(level) {
+  const legacySize = Number(level.size) || GRID_SIZE;
+  level.width = Math.max(MIN_GRID, Math.min(MAX_GRID, Math.round(Number(level.width) || legacySize)));
+  level.depth = Math.max(MIN_GRID, Math.min(MAX_GRID, Math.round(Number(level.depth) || legacySize)));
+  level.size = Math.max(level.width, level.depth);
+  if (Array.isArray(level.exitDoor)) { level.exitDoor = snapDoorToWall(level.exitDoor, level.width, level.depth); level.goal = [...level.exitDoor]; }
   const old = level.movingLasers; delete level.movingLasers;
   const lasers = (level.lasers || []).filter((e) => e.length >= 4).map((e) => [...e]);
   for (const e of old || []) {
@@ -189,7 +231,7 @@ export function migrateLevel(level) {
   if (barriers?.length) level.shocks = [...(level.shocks || []), ...barriers.map((c) => [c[0], c[1], 'down', 3, 3, 3])];
   for (const key of LIST_FIELDS) if (!Array.isArray(level[key])) level[key] = [];
   level.objectProperties ||= {};
-  level.version = 6;
+  level.version = 7;
   return level;
 }
 
@@ -198,6 +240,7 @@ export function expandLevel(world) {
   const props = world.objectProperties || {};
   if (!Object.values(props).some((p) => p && (p.w > 1 || p.d > 1))) return world;
   const out = { ...world, objectProperties: { ...props } };
+  const { w: maxX, d: maxZ } = worldDims(world);
   for (const [field, kind] of RESIZABLE) {
     const seen = new Set((world[field] || []).map((c) => `${c[0]},${c[1]}`));
     const cells = (world[field] || []).map((c) => [...c]);
@@ -206,7 +249,7 @@ export function expandLevel(world) {
       const w = Math.max(1, p.w | 0), d = Math.max(1, p.d | 0);
       for (let i = 0; i < w; i++) for (let j = 0; j < d; j++) {
         const nx = c[0] + i, nz = c[1] + j, k = `${nx},${nz}`;
-        if ((i || j) && !seen.has(k) && nx >= 0 && nz >= 0 && nx < GRID_SIZE && nz < GRID_SIZE) {
+        if ((i || j) && !seen.has(k) && nx >= 0 && nz >= 0 && nx < maxX && nz < maxZ) {
           seen.add(k); cells.push([nx, nz]);
           const { w: _w, d: _d, ...rest } = p;
           out.objectProperties[`${kind}:${nx}:${nz}`] = rest;
@@ -221,14 +264,13 @@ export function expandLevel(world) {
 /**
  * Generate boundary wall coordinates for a room, omitting the door opening.
  */
-export function boundaryWalls(exitDoor) {
-  const edge = GRID_SIZE - 1;
-  return Array.from({ length: GRID_SIZE * 4 - 4 }, (_, i) => {
-    if (i < GRID_SIZE) return [i, 0];
-    if (i < GRID_SIZE * 2 - 1) return [edge, i - (GRID_SIZE - 1)];
-    if (i < GRID_SIZE * 3 - 2) return [edge - (i - (GRID_SIZE * 2 - 2)), edge];
-    return [0, edge - (i - (GRID_SIZE * 3 - 3))];
-  }).filter(([x, z]) => x !== exitDoor[0] || z !== exitDoor[1]);
+export function boundaryWalls(exitDoor, w = GRID_SIZE, d = GRID_SIZE) {
+  const cells = [];
+  for (let x = 0; x < w; x++) cells.push([x, 0]);
+  for (let z = 1; z < d; z++) cells.push([w - 1, z]);
+  for (let x = w - 2; x >= 0; x--) cells.push([x, d - 1]);
+  for (let z = d - 2; z > 0; z--) cells.push([0, z]);
+  return cells.filter(([x, z]) => !exitDoor || x !== exitDoor[0] || z !== exitDoor[1]);
 }
 
 // <generated:levels>
@@ -341,6 +383,130 @@ export const CAMPAIGN_SPECS = [
       }
     }
   },
+  {
+    "name": "Switchback",
+    "hint": "A long winding corridor: hop the spikes, wade the pond, slide the ice, dodge the laser, grab the button and beat the shock gate.",
+    "width": 15,
+    "depth": 21,
+    "start": [2, 2],
+    "exitDoor": [14, 18],
+    "coins": [[4, 19], [12, 19], [3, 14], [10, 13], [12, 11], [7, 10], [3, 7], [11, 6], [9, 3], [12, 2], [3, 1]],
+    "walls": [[3, 16], [4, 16], [5, 16], [6, 16], [7, 16], [8, 16], [9, 16], [10, 16], [11, 16], [12, 16], [13, 16], [1, 12], [2, 12], [3, 12], [4, 12], [5, 12], [6, 12], [7, 12], [8, 12], [9, 12], [10, 12], [11, 12], [3, 8], [4, 8], [5, 8], [6, 8], [7, 8], [8, 8], [9, 8], [10, 8], [11, 8], [12, 8], [13, 8], [1, 4], [2, 4], [3, 4], [4, 4], [5, 4], [6, 4], [7, 4], [8, 4], [9, 4], [10, 4], [11, 4]],
+    "plates": [[2, 15]],
+    "ice": [[4, 11], [5, 11], [6, 11], [7, 11], [8, 11], [9, 11], [4, 10], [5, 10], [6, 10], [8, 10], [9, 10], [4, 9], [5, 9], [6, 9], [7, 9], [8, 9], [9, 9]],
+    "hazards": [[11, 11], [11, 10], [11, 9]],
+    "water": [[8, 7], [9, 7], [8, 6], [9, 6], [8, 5], [9, 5]],
+    "spikes": [[6, 3, 3.0], [6, 2, 3.0], [6, 1, 3.0]],
+    "cutters": [[4, 6, "z", 1.0, 0.5, 1.0]],
+    "lasers": [[7, 14, "x", 2.5, 1, "z", 0.5, 0.9]],
+    "shocks": [[8, 17, "down", 3, 3.0, 3.0], [8, 18, "down", 3, 3.0, 3.0], [8, 19, "down", 3, 3.0, 3.0]],
+    "timeLimit": 120,
+    "rotatorSpeed": 1.0
+  },
+  {
+    "name": "Crate Canyon",
+    "hint": "Push the crate onto the gold button to power down the shock gate. Bridge the acid, pull the lever, ride the lift to the tower button, and slip past the spinner.",
+    "width": 17,
+    "depth": 27,
+    "start": [2, 3],
+    "exitDoor": [8, 26],
+    "coins": [[3, 24], [13, 24], [5, 20], [13, 17], [8, 15], [3, 13], [11, 9], [2, 7], [13, 5], [6, 1]],
+    "rotators": [[8, 24]],
+    "walls": [[1, 22], [2, 22], [3, 22], [4, 22], [5, 22], [6, 22], [10, 22], [11, 22], [12, 22], [13, 22], [14, 22], [15, 22], [1, 18], [2, 18], [3, 18], [4, 18], [5, 18], [6, 18], [7, 18], [8, 18], [9, 18], [10, 18], [11, 18], [12, 18], [4, 12], [5, 12], [6, 12], [7, 12], [8, 12], [9, 12], [10, 12], [11, 12], [12, 12], [13, 12], [14, 12], [15, 12], [8, 11], [8, 7], [1, 6], [2, 6], [3, 6], [4, 6], [5, 6], [6, 6], [7, 6], [8, 6], [9, 6], [10, 6], [11, 6], [12, 6]],
+    "hazards": [[7, 22], [9, 22], [7, 21], [9, 21], [7, 17], [8, 17], [9, 17], [7, 16], [8, 16], [9, 16], [7, 14], [8, 14], [9, 14], [7, 13], [8, 13], [9, 13]],
+    "platforms": [[8, 22], [7, 15], [8, 15], [9, 15]],
+    "plates": [[8, 22], [11, 3]],
+    "lifts": [[8, 21, 1.2]],
+    "levers": [[13, 20]],
+    "water": [[3, 10], [4, 10], [5, 10], [3, 9], [4, 9], [5, 9], [3, 8], [4, 8], [5, 8]],
+    "blocks": [[4, 3]],
+    "continuousPlates": [[11, 3]],
+    "shocks": [[8, 8, "down", 3, 3.0, 3.0], [8, 9, "down", 3, 3.0, 3.0], [8, 10, "down", 3, 3.0, 3.0]],
+    "cutters": [[13, 15, "z", 1.5, 0.5, 1.0]],
+    "objectProperties": {
+      "platform:8:22": {
+        "height": 2.0,
+        "size": 0.95,
+        "color": "#7fb6ff",
+        "collision": true
+      },
+      "plate:11:3": {
+        "channel": 1
+      },
+      "shock:8:8": {
+        "channel": 1
+      },
+      "shock:8:9": {
+        "channel": 1
+      },
+      "shock:8:10": {
+        "channel": 1
+      }
+    },
+    "rotatorSpeed": 1.1,
+    "timeLimit": 150
+  },
+  {
+    "name": "Frozen Gallery",
+    "hint": "Slide across the ice, jump the sweeping laser (or grab the shield first), time the spikes and the saw, press the button and finish past the shocks and spinner.",
+    "width": 21,
+    "depth": 19,
+    "start": [2, 3],
+    "exitDoor": [20, 15],
+    "coins": [[6, 17], [6, 15], [2, 9], [12, 7], [8, 4], [14, 3], [8, 2]],
+    "walls": [[10, 17], [10, 13], [4, 12], [5, 12], [6, 12], [7, 12], [8, 12], [9, 12], [10, 12], [11, 12], [12, 12], [13, 12], [14, 12], [15, 12], [16, 12], [17, 12], [18, 12], [19, 12], [1, 6], [2, 6], [3, 6], [4, 6], [5, 6], [6, 6], [7, 6], [8, 6], [9, 6], [10, 6], [11, 6], [12, 6], [13, 6], [14, 6], [15, 6], [16, 6]],
+    "water": [[14, 17], [15, 17], [14, 16], [15, 16], [14, 15], [15, 15], [14, 14], [15, 14], [14, 13], [15, 13]],
+    "rotators": [[17, 15]],
+    "plates": [[3, 10]],
+    "spikes": [[6, 10, 3.0], [6, 8, 3.0]],
+    "powerups": [[2, 5, "shield"]],
+    "ice": [[3, 5], [4, 5], [5, 5], [6, 5], [7, 5], [8, 5], [9, 5], [10, 5], [11, 5], [12, 5], [13, 5], [14, 5], [15, 5], [16, 5], [17, 5], [3, 4], [4, 4], [5, 4], [6, 4], [7, 4], [9, 4], [10, 4], [11, 4], [12, 4], [13, 4], [14, 4], [15, 4], [16, 4], [17, 4], [3, 3], [4, 3], [5, 3], [6, 3], [7, 3], [8, 3], [9, 3], [10, 3], [11, 3], [12, 3], [13, 3], [15, 3], [16, 3], [17, 3], [3, 2], [4, 2], [5, 2], [6, 2], [7, 2], [9, 2], [10, 2], [11, 2], [12, 2], [13, 2], [14, 2], [15, 2], [16, 2], [17, 2], [3, 1], [4, 1], [5, 1], [6, 1], [7, 1], [8, 1], [9, 1], [10, 1], [11, 1], [12, 1], [13, 1], [14, 1], [15, 1], [16, 1], [17, 1]],
+    "lasers": [[10, 3, "x", 4.0, 2, "z", 0.5, 0.7]],
+    "cutters": [[10, 9, "z", 2.0, 0.5, 1.2]],
+    "shocks": [[10, 14, "down", 3, 3.0, 3.0], [10, 15, "down", 3, 3.0, 3.0], [10, 16, "down", 3, 3.0, 3.0]],
+    "rotatorSpeed": 1.0,
+    "timeLimit": 110
+  },
+  {
+    "name": "Deeba's Grand Exit",
+    "hint": "Everything you have learned, in one long run: crate button, ice, acid bridge, laser patrol, lever and lift, and a spinner at the door.",
+    "width": 23,
+    "depth": 33,
+    "start": [2, 3],
+    "exitDoor": [11, 32],
+    "rotators": [[11, 30]],
+    "coins": [[5, 29], [17, 29], [17, 25], [19, 23], [5, 21], [3, 17], [10, 15], [19, 13], [3, 11], [16, 7], [9, 3], [13, 3], [17, 1]],
+    "walls": [[1, 27], [2, 27], [3, 27], [4, 27], [5, 27], [6, 27], [7, 27], [8, 27], [9, 27], [13, 27], [14, 27], [15, 27], [16, 27], [17, 27], [18, 27], [19, 27], [20, 27], [21, 27], [4, 24], [5, 24], [6, 24], [7, 24], [8, 24], [9, 24], [10, 24], [11, 24], [12, 24], [13, 24], [14, 24], [15, 24], [16, 24], [17, 24], [18, 24], [19, 24], [20, 24], [21, 24], [1, 18], [2, 18], [3, 18], [4, 18], [5, 18], [6, 18], [7, 18], [8, 18], [9, 18], [10, 18], [11, 18], [12, 18], [13, 18], [14, 18], [15, 18], [16, 18], [17, 18], [18, 18], [4, 12], [5, 12], [6, 12], [7, 12], [8, 12], [9, 12], [10, 12], [11, 12], [12, 12], [13, 12], [14, 12], [15, 12], [16, 12], [17, 12], [18, 12], [19, 12], [20, 12], [21, 12], [1, 6], [2, 6], [3, 6], [4, 6], [5, 6], [6, 6], [7, 6], [8, 6], [9, 6], [10, 6], [11, 6], [12, 6], [13, 6], [14, 6], [15, 6], [16, 6], [17, 6], [18, 6]],
+    "hazards": [[10, 27], [12, 27], [10, 26], [12, 26], [9, 17], [10, 17], [11, 17], [9, 16], [10, 16], [11, 16], [9, 14], [10, 14], [11, 14], [9, 13], [10, 13], [11, 13]],
+    "platforms": [[11, 27], [9, 15], [10, 15], [11, 15]],
+    "plates": [[11, 27], [7, 9]],
+    "lifts": [[11, 26, 1.2]],
+    "levers": [[4, 25]],
+    "spikes": [[14, 23, 3.0], [14, 22, 3.0], [14, 21, 3.0], [14, 20, 3.0], [14, 19, 3.0], [7, 5, 3.0], [7, 4, 3.0], [7, 3, 3.0], [7, 2, 3.0], [7, 1, 3.0]],
+    "water": [[12, 11], [13, 11], [12, 10], [13, 10], [12, 9], [13, 9], [12, 8], [13, 8], [12, 7], [13, 7]],
+    "continuousPlates": [[7, 9]],
+    "blocks": [[19, 9]],
+    "powerups": [[3, 5, "jump"]],
+    "ice": [[11, 5], [12, 5], [13, 5], [14, 5], [15, 5], [16, 5], [11, 4], [12, 4], [13, 4], [14, 4], [15, 4], [16, 4], [11, 3], [12, 3], [14, 3], [15, 3], [16, 3], [11, 2], [12, 2], [13, 2], [14, 2], [15, 2], [16, 2], [11, 1], [12, 1], [13, 1], [14, 1], [15, 1], [16, 1]],
+    "cutters": [[16, 15, "z", 1.5, 0.5, 1.0]],
+    "lasers": [[10, 21, "x", 4.0, 2, "z", 0.5, 0.9]],
+    "objectProperties": {
+      "platform:11:27": {
+        "height": 2.0,
+        "size": 0.95,
+        "color": "#7fb6ff",
+        "collision": true
+      },
+      "plate:7:9": {
+        "channel": 1
+      },
+      "laser:10:21": {
+        "channel": 1
+      }
+    },
+    "rotatorSpeed": 1.2,
+    "timeLimit": 210
+  },
 ];
 // </generated:levels>
 
@@ -352,26 +518,28 @@ const copyCells = (cells) => (cells || []).map((cell) => [...cell]);
  * Build campaign level `index` – or a friendly generic level when the index is beyond the campaign.
  */
 export function makeLevel(index = 0) {
-  const exitDoor = [GRID_SIZE >> 1, GRID_SIZE - 1];
+  const spec = CAMPAIGN_SPECS[index];
+  const width = spec?.width || GRID_SIZE, depth = spec?.depth || GRID_SIZE;
+  const exitDoor = spec?.exitDoor ? [...spec.exitDoor] : [width >> 1, depth - 1];
   const level = {
-    version: 6, name: `Level ${index + 1}`, hint: '', exitDoor, goal: [...exitDoor], start: [GRID_SIZE >> 1, 2],
-    objectProperties: {}, rotatorSpeed: 1, standalone: false,
+    version: 7, name: `Level ${index + 1}`, hint: '', exitDoor, goal: [...exitDoor], start: spec?.start ? [...spec.start] : [width >> 1, 2],
+    width, depth, size: Math.max(width, depth), objectProperties: {}, rotatorSpeed: 1, standalone: false,
   };
   for (const key of LIST_FIELDS) level[key] = [];
-  const spec = CAMPAIGN_SPECS[index];
   if (spec) {
     for (const [key, value] of Object.entries(spec)) {
-      if (key === 'walls') level.walls = boundaryWalls(exitDoor).concat(copyCells(value));
+      if (['width', 'depth', 'start', 'exitDoor'].includes(key)) continue;
+      if (key === 'walls') level.walls = boundaryWalls(exitDoor, width, depth).concat(copyCells(value));
       else if (key === 'objectProperties') level.objectProperties = JSON.parse(JSON.stringify(value));
       else if (Array.isArray(value)) level[key] = copyCells(value);
       else level[key] = value;
     }
-    if (!spec.walls) level.walls = boundaryWalls(exitDoor);
+    if (!spec.walls) level.walls = boundaryWalls(exitDoor, width, depth);
     level.id = `catlab-${index + 1}`;
     return level;
   }
   Object.assign(level, {
-    walls: boundaryWalls(exitDoor).concat([[4, 6], [8, 6]]),
+    walls: boundaryWalls(exitDoor, width, depth).concat([[4, 6], [8, 6]]),
     plates: [[6, 4]], coins: [[5, 3], [7, 3], [6, 6]],
     rotators: [[GRID_SIZE >> 1, 8]], rotatorSpeed: 1.1, shocks: [[GRID_SIZE >> 1, 6, 'down', 3, 3, 3]], levers: [[2, 2]],
     blocks: index % 2 ? [[7, 4]] : [],
@@ -399,6 +567,9 @@ export function loadCampaign() {
         for (const level of saved.levels) {
           migrateLevel(level);
         }
+        // Built-in rooms added in later versions appear at the end of an existing campaign.
+        const seen = Number.isFinite(saved.builtinSeen) ? saved.builtinSeen : 6;
+        CAMPAIGN_SPECS.forEach((_, i) => { if (i >= seen) saved.levels.push(makeLevel(i)); });
         return saved.levels;
       }
     }
@@ -417,14 +588,14 @@ export function hasLegacySave() {
  * Convert discrete grid coordinates to continuous world coordinates.
  */
 export function gridToWorld(x, z) {
-  return { x: x - HALF_GRID, z: z - HALF_GRID };
+  return { x: x - HALF_X, z: z - HALF_Z };
 }
 
 /**
  * Convert single grid index to world offset.
  */
-export function indexToWorld(index) {
-  return index - HALF_GRID;
+export function indexToWorld(index, axis = 'x') {
+  return index - (axis === 'z' ? HALF_Z : HALF_X);
 }
 
 /**

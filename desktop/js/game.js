@@ -4,9 +4,16 @@
  */
 
 import { surfaceHeightAt } from './materials.js';
+import { deathDuration } from './deaths.js';
 import {
-  GRID_SIZE,
-  HALF_GRID,
+  GRID_W,
+  GRID_D,
+  HALF_X,
+  HALF_Z,
+  CAMPAIGN_SPECS,
+  DOOR_CLEAR,
+  doorSide,
+  activateWorld,
   LEVEL_TIME_LIMIT_SECONDS,
   SAVE_KEY,
   gridToWorld,
@@ -16,6 +23,7 @@ import {
   LIST_FIELDS,
   lethalHazard,
   channelOf,
+  worldDims,
   expandLevel,
   migrateLevel,
 } from './constants.js';
@@ -118,23 +126,58 @@ export class GameManager {
     this.loadCampaignLevel(selected?.standalone ? this.activeLevelIndex : 0);
   }
 
-  addCampaignLevel() {
+  addCampaignLevel(width, depth) {
     const next = makeLevel(this.campaignLevels.length);
     next.name = `Level ${this.campaignLevels.length + 1}`;
+    next.id = `custom-${Date.now().toString(36)}`;
     this.campaignLevels.push(next);
     this.loadCampaignLevel(this.campaignLevels.length - 1);
     this.saveWorld(false);
   }
 
+  duplicateLevel(index) {
+    const source = this.campaignLevels[index];
+    if (!source) return;
+    const copy = JSON.parse(JSON.stringify(source));
+    copy.name = `${source.name} copy`; copy.id = `custom-${Date.now().toString(36)}`; copy.standalone = false;
+    this.campaignLevels.splice(index + 1, 0, copy);
+    this.saveWorld(false);
+    return index + 1;
+  }
+
+  deleteLevel(index) {
+    if (this.campaignLevels.length <= 1 || !this.campaignLevels[index]) return false;
+    this.campaignLevels.splice(index, 1);
+    const next = Math.min(this.activeLevelIndex > index ? this.activeLevelIndex - 1 : this.activeLevelIndex, this.campaignLevels.length - 1);
+    this.saveWorld(false);
+    this.loadCampaignLevel(next);
+    return true;
+  }
+
+  moveLevel(index, delta) {
+    const to = index + delta;
+    if (to < 0 || to >= this.campaignLevels.length) return false;
+    const [item] = this.campaignLevels.splice(index, 1);
+    this.campaignLevels.splice(to, 0, item);
+    if (this.activeLevelIndex === index) this.activeLevelIndex = to;
+    else if (this.activeLevelIndex === to) this.activeLevelIndex = index;
+    this.world = this.campaignLevels[this.activeLevelIndex];
+    this.saveWorld(false);
+    return true;
+  }
+
+  /** What the level-select cards show for a level: best stars / time from earlier runs. */
+  levelRecord(level) { return readBest()[level.name] || null; }
+
   /** The level with every resized object expanded to the cells it covers (what physics, rendering and hazards use). */
-  refreshPlay() { this._play = expandLevel(this.world); return this._play; }
+  refreshPlay() { activateWorld(this.world); this._play = expandLevel(this.world); return this._play; }
   get play() { return this._play || this.refreshPlay(); }
 
   generateChallengeLevel() {
     const level = makeLevel(this.campaignLevels.length);
     const variant = this.campaignLevels.length % 4;
-    level.name = `Experimental Chamber ${this.campaignLevels.length - 7}`;
-    level.walls = level.walls.filter(([x, z]) => x === 0 || z === 0 || x === GRID_SIZE - 1 || z === GRID_SIZE - 1);
+    level.name = `Experimental Chamber ${Math.max(1, this.campaignLevels.length - CAMPAIGN_SPECS.length + 1)}`;
+    level.walls = level.walls.filter(([x, z]) => x === 0 || z === 0 || x === level.width - 1 || z === level.depth - 1);
     level.blocks = [[variant % 2 ? 7 : 5, 5]];
     level.hazards = [[4, 7], [5, 7], [7, 7], [8, 7]];
     level.coins = [[2, 3], [10, 3], [6, 8], [3, 10], [9, 10]];
@@ -152,7 +195,7 @@ export class GameManager {
     level.lasers = [[6, 10, 'z', 1, 5, 'x', 0.5, 1]];
     const shift = (list) => (list || []).map((c) => [c[0] + 2, c[1] + 4, ...c.slice(2)]);
     for (const k of ['blocks', 'hazards', 'coins', 'plates', 'rotators', 'shocks', 'cutters', 'spikes', 'water', 'ice', 'powerups', 'levers', 'lasers']) level[k] = shift(level[k]);
-    level.start = [HALF_GRID, 2];
+    level.start = [level.width >> 1, 2];
     level.standalone = true;
     this.campaignLevels.push(level);
     this.loadCampaignLevel(this.campaignLevels.length - 1);
@@ -271,13 +314,13 @@ export class GameManager {
     this.onSound?.('burst');
     this.onDeath?.(cause, { ...this.playerPos });
     const failedLevel = this.activeLevelIndex + 1;
-    const messages = { acid: 'Acid! ', lava: 'Acid! ', laser: 'Sliced by a laser · ', shock: 'Shocked · ', cutter: 'Cut by a blade · ', spikes: 'Spiked · ', time: 'Time ran out · ' };
+    const messages = { acid: 'Dissolved in acid · ', lava: 'Acid! ', laser: 'Sliced by a laser · ', shock: 'Shocked · ', cutter: 'Cut by a blade · ', spikes: 'Spiked · ', time: 'Time ran out · ' };
     if (toast) toast(`${messages[cause] || 'You died · '}level ${failedLevel} restarting`);
     this.updateUI();
     this._deathTimer = setTimeout(() => {
       this.resetRun(false);
       this.onRespawn?.();
-    }, 1250);
+    }, deathDuration(cause));
   }
 
   /**
@@ -347,7 +390,7 @@ export class GameManager {
         const p = gridToWorld(cell[0], cell[1]);
         if (feet < 0.35 && Math.abs(player.x - p.x) < 0.56 && Math.abs(player.z - p.z) < 0.56) { cause = 'acid'; break; }
       }
-      if (!cause && !frozen) cause = lethalHazard(play, player.x + HALF_GRID, player.z + HALF_GRID, feet, sim, this.channelsOn);
+      if (!cause && !frozen) cause = lethalHazard(play, player.x + HALF_X, player.z + HALF_Z, feet, sim, this.channelsOn);
       if (cause) { this.kill(cause, toast); return; }
     }
 
@@ -373,7 +416,6 @@ export class GameManager {
     const platesComplete = doorPlates.length === 0 || doorPlates.every((c) => this.activatedPlates.has(`${c[0]},${c[1]}`));
     if (this.doorsOpen !== platesComplete) {
       this.doorsOpen = platesComplete;
-      if (board.exitDoorMesh) board.exitDoorMesh.material.color.set(this.doorsOpen ? '#77bd91' : '#56636a');
       if (toast) toast(this.doorsOpen ? 'Gate opening' : 'Pressure released · gate closing');
       if (this.doorsOpen) this.onSound?.('door');
       this.updateUI();
@@ -383,10 +425,11 @@ export class GameManager {
     if (this.doorsOpen && this.world.exitDoor) {
       const [doorX, doorZ] = this.world.exitDoor;
       const door = gridToWorld(doorX, doorZ);
-      const crossed = doorZ === GRID_SIZE - 1 ? player.z > door.z + 0.2 && Math.abs(player.x - door.x) < 0.72
-        : doorZ === 0 ? player.z < door.z - 0.2 && Math.abs(player.x - door.x) < 0.72
-          : doorX === GRID_SIZE - 1 ? player.x > door.x + 0.2 && Math.abs(player.z - door.z) < 0.72
-            : doorX === 0 ? player.x < door.x - 0.2 && Math.abs(player.z - door.z) < 0.72
+      const side = doorSide(this.world.exitDoor, GRID_W, GRID_D), half = DOOR_CLEAR / 2;
+      const crossed = side === 'z1' ? player.z > door.z + 0.2 && Math.abs(player.x - door.x) < half
+        : side === 'z0' ? player.z < door.z - 0.2 && Math.abs(player.x - door.x) < half
+          : side === 'x1' ? player.x > door.x + 0.2 && Math.abs(player.z - door.z) < half
+            : side === 'x0' ? player.x < door.x - 0.2 && Math.abs(player.z - door.z) < half
               : Math.hypot(player.x - door.x, player.z - door.z) < 0.8;
       if (crossed) this.winRun(toast);
     }
@@ -523,20 +566,11 @@ export class GameManager {
   }
 
   refreshLevelNavigation() {
-    const host = $('levelList');
-    if (!host) return;
-    host.innerHTML = '';
-    this.campaignLevels.forEach((level, index) => {
-      const button = document.createElement('button');
-      button.className = `level-select${index === this.activeLevelIndex ? ' active' : ''}`;
-      const record = readBest()[level.name];
-      const stars = record ? '★'.repeat(record.stars) + '☆'.repeat(3 - record.stars) : '';
-      button.textContent = `${String(index + 1).padStart(2, '0')}  ${level.name}${stars ? `  ${stars}` : ''}`;
-      button.addEventListener('click', () => this.loadCampaignLevel(index));
-      host.append(button);
-    });
-    $('levelCount').textContent = `${this.campaignLevels.length} ${this.campaignLevels.length === 1 ? 'LEVEL' : 'LEVELS'}`;
-    $('panelLevelCount').textContent = `${String(this.activeLevelIndex + 1).padStart(2, '0')} / ${String(this.campaignLevels.length).padStart(2, '0')}`;
+    // The level list itself lives on the Levels page (ui.js draws the cards); here we keep the small counters in sync.
+    if ($('levelCount')) $('levelCount').textContent = `${this.campaignLevels.length} ${this.campaignLevels.length === 1 ? 'LEVEL' : 'LEVELS'}`;
+    if ($('panelLevelCount')) $('panelLevelCount').textContent = `${String(this.activeLevelIndex + 1).padStart(2, '0')} / ${String(this.campaignLevels.length).padStart(2, '0')}`;
+    if ($('worldSizeLabel')) { const { w, d } = worldDims(this.world); $('worldSizeLabel').textContent = `${w} × ${d}`; }
+    this.onLevelsChanged?.();
 
     const standaloneToggle = $('standaloneLevel');
     if (standaloneToggle) standaloneToggle.checked = !!this.world.standalone;
@@ -546,7 +580,7 @@ export class GameManager {
 
   saveWorld(showMessage = true, toast = null) {
     try {
-      localStorage.setItem(SAVE_KEY, JSON.stringify({ version: 1, levels: this.campaignLevels }));
+      localStorage.setItem(SAVE_KEY, JSON.stringify({ version: 2, builtinSeen: CAMPAIGN_SPECS.length, levels: this.campaignLevels }));
       if (showMessage && toast) toast('Levels saved on this computer');
     } catch {
       if (toast) toast('Could not save this world');
@@ -571,7 +605,7 @@ export class GameManager {
     for (const source of valid) {
       const level = migrateLevel({ ...source });
       for (const key of listFields) level[key] = Array.isArray(level[key]) ? level[key] : [];
-      level.exitDoor = Array.isArray(level.exitDoor) ? level.exitDoor : [GRID_SIZE >> 1, GRID_SIZE - 1];
+      level.exitDoor = Array.isArray(level.exitDoor) ? level.exitDoor : [level.width >> 1, level.depth - 1];
       level.goal = [...level.exitDoor];
       level.objectProperties ||= {};
       level.name ||= `Imported ${this.campaignLevels.length + 1}`;

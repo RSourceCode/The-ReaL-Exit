@@ -81,6 +81,9 @@ export function createDeeba(equipped = DEFAULT_EQUIPPED) {
   const footL = makeFoot(-1), footR = makeFoot(1);
 
   rig.add(torso, belt, core, head, armL, armR, footL, footR);
+  // names let the death animations find (and tear off) the individual parts of a cloned model
+  rig.name = 'd_rig'; torso.name = 'd_torso'; belt.name = 'd_belt'; core.name = 'd_core'; head.name = 'd_head';
+  armL.name = 'd_armL'; armR.name = 'd_armR'; footL.name = 'd_footL'; footR.name = 'd_footR';
 
   // Soft blob shadow disc that stays on the ground regardless of the rig's animation.
   const accessories = { hat: null, face: null, neck: null, back: null };
@@ -208,7 +211,7 @@ export function createDeeba(equipped = DEFAULT_EQUIPPED) {
   function update(dt, s) {
     state.time += dt;
     const t = state.time;
-    if (s.yaw !== undefined && !state.dead) state.yaw += wrap(s.yaw - state.yaw) * Math.min(1, dt * (s.onIce ? 4 : 13));
+    if (s.yaw !== undefined && !state.dead) state.yaw += wrap(s.yaw - state.yaw) * Math.min(1, dt * (s.onIce ? 7 : 13));
     root.rotation.y = state.yaw;
 
     const speed = s.speed01 || 0;
@@ -230,17 +233,20 @@ export function createDeeba(equipped = DEFAULT_EQUIPPED) {
     rig.position.y = (-0.5 * (1 - sy * grow)) + (grounded ? Math.abs(Math.sin(state.phase)) * 0.035 * speed : 0);
 
     // Locomotion
-    const run = grounded && !s.onIce ? speed : 0;
+    // On ice Deeba keeps stepping while she is pushing, and slides stiff-legged (a skid) when she is not.
+    const skid01 = s.onIce ? Math.min(1, (s.skid || 0) / 4.5) : 0;
+    const run = grounded ? speed * (s.onIce ? (s.pushing ? 0.85 : 0) : 1) : 0;
     state.phase += dt * (5 + 11 * speed) * (run > 0.05 ? 1 : 0);
     const swing = Math.sin(state.phase) * 0.9 * run;
     footL.position.z = 0.02 + Math.sin(state.phase) * 0.14 * run;
     footR.position.z = 0.02 - Math.sin(state.phase) * 0.14 * run;
     footL.position.y = -0.43 + Math.max(0, Math.cos(state.phase)) * 0.07 * run;
     footR.position.y = -0.43 + Math.max(0, -Math.cos(state.phase)) * 0.07 * run;
+    footL.position.z += 0.13 * skid01; footR.position.z -= 0.09 * skid01;       // skating stance
 
     let targetArm = swing, armOut = 0.08;
     if (!grounded) { targetArm = Math.PI * 0.85 - 0.2 * Math.max(0, -vy * 0.05); armOut = 0.35 + (vy > 0 ? 0.1 : 0.4); }
-    else if (s.onIce) { targetArm = 0.3; armOut = 0.7; }
+    else if (s.onIce) { targetArm = swing * 0.6 + 0.2; armOut = 0.25 + 0.5 * skid01; }
     else if (s.won) { targetArm = Math.PI * 0.95 + Math.sin(t * 12) * 0.3; armOut = 0.3; }
     state.armPose += (targetArm - state.armPose) * Math.min(1, dt * 16);
     armL.rotation.x = grounded && !s.won ? -state.armPose : -state.armPose * 0.4 - 0.6;
@@ -248,10 +254,11 @@ export function createDeeba(equipped = DEFAULT_EQUIPPED) {
     armL.rotation.z = armOut; armR.rotation.z = -armOut;
     if (!grounded) { armL.rotation.x = -state.armPose * 0.35 - 0.3; armR.rotation.x = -state.armPose * 0.35 - 0.3; }
 
-    const leanTarget = s.onIce ? -0.12 + 0.1 * speed : 0.22 * run;
+    const leanTarget = s.onIce ? (s.pushing ? 0.12 * speed : 0) - 0.16 * skid01 : 0.22 * run;
     state.lean += (leanTarget - state.lean) * Math.min(1, dt * 9);
     rig.rotation.x = state.lean + (grounded ? 0 : -0.05 * vy * 0.05);
-    rig.rotation.z = Math.sin(state.phase) * 0.05 * run + (s.won ? Math.sin(t * 9) * 0.12 : 0);
+    state.slip = (state.slip || 0) + ((s.slip || 0) - (state.slip || 0)) * Math.min(1, dt * 8);
+    rig.rotation.z = Math.sin(state.phase) * 0.05 * run + (s.won ? Math.sin(t * 9) * 0.12 : 0) + state.slip * 0.2 * (s.onIce ? 1 : 0);
     if (s.won) { root.rotation.y += Math.sin(t * 6) * 0.35; rig.position.y += Math.abs(Math.sin(t * 6)) * 0.12; }
     head.rotation.x = -state.lean * 0.5 + Math.sin(t * 1.3) * 0.015;
     head.rotation.z = Math.sin(t * 0.9) * 0.025 + Math.sin(state.phase) * 0.03 * run;

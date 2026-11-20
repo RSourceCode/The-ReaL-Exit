@@ -22,27 +22,40 @@ door is in the far wall at ``[6, 12]``.  Interactive piece formats:
 
 from typing import Any, Dict, List, Optional
 
+from backend.levels_long import LONG_SPECS
+
 GRID_SIZE = 17
 EXIT_DOOR = [GRID_SIZE // 2, GRID_SIZE - 1]
 START = [GRID_SIZE // 2, 2]
 SHIFT_X, SHIFT_Z = 2, 4   # the 13x13 chamber designs below are re-homed into the longer 17x17 lab
 
 
-def boundary_walls(exit_door) -> List[List[int]]:
-    edge = GRID_SIZE - 1
+def boundary_walls(exit_door, width: int = GRID_SIZE, depth: int = GRID_SIZE) -> List[List[int]]:
+    """Every cell of the outer ring of a ``width`` x ``depth`` room except the exit door."""
     cells = []
-    for i in range(GRID_SIZE * 4 - 4):
-        if i < GRID_SIZE:
-            cell = [i, 0]
-        elif i < GRID_SIZE * 2 - 1:
-            cell = [edge, i - (GRID_SIZE - 1)]
-        elif i < GRID_SIZE * 3 - 2:
-            cell = [edge - (i - (GRID_SIZE * 2 - 2)), edge]
-        else:
-            cell = [0, edge - (i - (GRID_SIZE * 3 - 3))]
-        if cell != list(exit_door):
-            cells.append(cell)
-    return cells
+    for x in range(width):
+        cells.append([x, 0])
+    for z in range(1, depth):
+        cells.append([width - 1, z])
+    for x in range(width - 2, -1, -1):
+        cells.append([x, depth - 1])
+    for z in range(depth - 2, 0, -1):
+        cells.append([0, z])
+    return [c for c in cells if c != list(exit_door)]
+
+
+def snap_door_to_wall(door, width: int, depth: int) -> List[int]:
+    """Doors live in the outer wall: move a stray door to the nearest wall, keeping it clear of the corners."""
+    x, z = int(door[0]), int(door[1])
+    gaps = {"x0": x, "x1": width - 1 - x, "z0": z, "z1": depth - 1 - z}
+    side = min(gaps, key=gaps.get)
+    if side == "x0":
+        return [0, max(2, min(depth - 3, z))]
+    if side == "x1":
+        return [width - 1, max(2, min(depth - 3, z))]
+    if side == "z0":
+        return [max(2, min(width - 3, x)), 0]
+    return [max(2, min(width - 3, x)), depth - 1]
 
 
 def row(z: int, x0: int, x1: int, skip=()) -> List[List[int]]:
@@ -206,6 +219,9 @@ CAMPAIGN_SPECS[5].setdefault("levers", []).append([4, 14])
 CAMPAIGN_SPECS[5]["hint"] += " The pink lever (E) powers down the shocks."
 _wire(CAMPAIGN_SPECS[5], "levers", [4, 14], [("shocks", [7, 15]), ("shocks", [8, 15]), ("shocks", [9, 15])])
 
+# Levels 7+: long, winding rooms (see levels_long.py)
+CAMPAIGN_SPECS.extend(LONG_SPECS)
+
 # Fields whose cells can be stretched with ``objectProperties[kind:x:z] = {"w": n, "d": m}``.
 RESIZABLE = (("walls", "wall"), ("platforms", "platform"), ("hazards", "hazard"), ("ice", "ice"), ("water", "water"))
 
@@ -227,7 +243,14 @@ def migrate_level(level: Dict[str, Any]) -> Dict[str, Any]:
         level["shocks"] += [[c[0], c[1], "down", 3, 3.0, 3.0] for c in barriers]
     for key in LIST_FIELDS:
         level.setdefault(key, [])
-    level["version"] = 6
+    legacy = int(level.get("size", GRID_SIZE))
+    level["width"] = max(5, int(level.get("width", legacy)))
+    level["depth"] = max(5, int(level.get("depth", legacy)))
+    level["size"] = max(level["width"], level["depth"])
+    if level.get("exitDoor"):
+        level["exitDoor"] = snap_door_to_wall(level["exitDoor"], level["width"], level["depth"])
+        level["goal"] = list(level["exitDoor"])
+    level["version"] = 7
     return level
 
 
@@ -238,7 +261,8 @@ def expand_level(level: Dict[str, Any]) -> Dict[str, Any]:
         return level
     out = dict(level)
     new_props = dict(props)
-    size = int(level.get("size", GRID_SIZE))
+    legacy = int(level.get("size", GRID_SIZE))
+    size_x, size_z = int(level.get("width", legacy)), int(level.get("depth", legacy))
     for field, kind in RESIZABLE:
         seen = {(int(c[0]), int(c[1])) for c in level.get(field, [])}
         cells = [list(c) for c in level.get(field, [])]
@@ -248,7 +272,7 @@ def expand_level(level: Dict[str, Any]) -> Dict[str, Any]:
             for i in range(w):
                 for j in range(d):
                     n = (int(c[0]) + i, int(c[1]) + j)
-                    if (i or j) and n not in seen and 0 <= n[0] < size and 0 <= n[1] < size:
+                    if (i or j) and n not in seen and 0 <= n[0] < size_x and 0 <= n[1] < size_z:
                         seen.add(n)
                         cells.append([n[0], n[1]])
                         new_props[f"{kind}:{n[0]}:{n[1]}"] = {k: v for k, v in p.items() if k not in ("w", "d")}
@@ -259,18 +283,24 @@ def expand_level(level: Dict[str, Any]) -> Dict[str, Any]:
 
 def make_level(index: int = 0) -> Dict[str, Any]:
     """Build campaign level ``index`` (or a moderately interesting generic level beyond the campaign)."""
+    spec = CAMPAIGN_SPECS[index] if 0 <= index < len(CAMPAIGN_SPECS) else {}
+    width = int(spec.get("width", GRID_SIZE))
+    depth = int(spec.get("depth", GRID_SIZE))
+    door = list(spec.get("exitDoor", [width // 2, depth - 1]))
+    start = list(spec.get("start", [width // 2, 2]))
     base: Dict[str, Any] = {
-        "version": 6, "name": f"Level {index + 1}", "hint": "",
-        "exitDoor": list(EXIT_DOOR), "objectProperties": {}, "rotatorSpeed": 1.0,
-        "start": list(START), "goal": list(EXIT_DOOR), "standalone": False, "size": GRID_SIZE,
+        "version": 7, "name": f"Level {index + 1}", "hint": "",
+        "exitDoor": door, "objectProperties": {}, "rotatorSpeed": 1.0,
+        "start": start, "goal": list(door), "standalone": False, "width": width, "depth": depth, "size": max(width, depth),
     }
     for key in LIST_FIELDS:
         base[key] = []
-    if 0 <= index < len(CAMPAIGN_SPECS):
-        spec = CAMPAIGN_SPECS[index]
+    if spec:
         for key, value in spec.items():
+            if key in ("width", "depth", "start", "exitDoor"):
+                continue
             if key == "walls":
-                base["walls"] = boundary_walls(EXIT_DOOR) + [list(c) for c in value]
+                base["walls"] = boundary_walls(door, width, depth) + [list(c) for c in value]
             elif key == "objectProperties":
                 base[key] = {k: dict(v) for k, v in value.items()}
             elif isinstance(value, list):
@@ -278,12 +308,12 @@ def make_level(index: int = 0) -> Dict[str, Any]:
             else:
                 base[key] = value
         if "walls" not in spec:
-            base["walls"] = boundary_walls(EXIT_DOOR)
+            base["walls"] = boundary_walls(door, width, depth)
         base["id"] = f"catlab-{index + 1}"
         return base
     # Generic extra level (used by the editor's "Add level"): a plate, a crate, a spinner and a few coins.
     base.update({
-        "walls": boundary_walls(EXIT_DOOR) + [[4, 6], [8, 6]],
+        "walls": boundary_walls(door, width, depth) + [[4, 6], [8, 6]],
         "plates": [[6, 4]], "coins": [[5, 3], [7, 3], [6, 6]],
         "rotators": [[6, 8]], "rotatorSpeed": 1.1, "shocks": [[6, 6, "down", 3, 3.0, 3.0]], "levers": [[2, 2]],
         "blocks": [[7, 4]] if index % 2 else [],

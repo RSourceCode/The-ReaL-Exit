@@ -4,7 +4,7 @@
  */
 
 import * as THREE from '../../node_modules/three/build/three.module.js';
-import { RL_ACTION_DURATION_SECONDS, HALF_GRID, indexToWorld } from './constants.js';
+import { RL_ACTION_DURATION_SECONDS, HALF_X, HALF_Z, indexToWorld } from './constants.js';
 import { PLAYER_JUMP_IMPULSE, WORLD_GRAVITY, PLAYER_JUMP_DURATION_SECONDS } from './physics.js';
 
 const $ = (id) => document.getElementById(id);
@@ -91,11 +91,11 @@ export class RLPlaybackController {
             const entry = boardMeshes.physicsVisuals[index];
             if (!entry?.body) return;
             const halfY = entry.body.translation().y;
-            entry.body.setTranslation({ x: cell[0] - HALF_GRID, y: halfY, z: cell[1] - HALF_GRID }, true);
-            entry.body.setNextKinematicTranslation?.({ x: cell[0] - HALF_GRID, y: halfY, z: cell[1] - HALF_GRID });
+            entry.body.setTranslation({ x: cell[0] - HALF_X, y: halfY, z: cell[1] - HALF_Z }, true);
+            entry.body.setNextKinematicTranslation?.({ x: cell[0] - HALF_X, y: halfY, z: cell[1] - HALF_Z });
             entry.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
             entry.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
-            entry.mesh.position.set(cell[0] - HALF_GRID, halfY, cell[1] - HALF_GRID);
+            entry.mesh.position.set(cell[0] - HALF_X, halfY, cell[1] - HALF_Z);
           });
         }
         if (boardMeshes?.leverMeshes) {
@@ -131,7 +131,7 @@ export class RLPlaybackController {
 
         if (result.done) {
           if (position) {
-            this.physicsManager.setPlayerFeet(indexToWorld(position[0]), result.elevation ?? 0, indexToWorld(position[1]));
+            this.physicsManager.setPlayerFeet(indexToWorld(position[0], 'x'), result.elevation ?? 0, indexToWorld(position[1], 'z'));
             this.physicsManager.syncPlayerFromPhysics(player, playerMesh);
           }
           this._finishPlayback(result);
@@ -140,8 +140,8 @@ export class RLPlaybackController {
 
         pb.fromElev = result.elevationBefore ?? 0;
         pb.toElev = result.elevation ?? 0;
-        pb.from = { x: indexToWorld(previousPosition[0]), z: indexToWorld(previousPosition[1]) };
-        pb.to = { x: indexToWorld(position[0]), z: indexToWorld(position[1]) };
+        pb.from = { x: indexToWorld(previousPosition[0], 'x'), z: indexToWorld(previousPosition[1], 'z') };
+        pb.to = { x: indexToWorld(position[0], 'x'), z: indexToWorld(position[1], 'z') };
         pb.jump = action === 6;
         pb.throw = Boolean(result.rotatorHit);
         pb.duration = pb.jump ? PLAYER_JUMP_DURATION_SECONDS : RL_ACTION_DURATION_SECONDS;

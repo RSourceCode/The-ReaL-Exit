@@ -236,5 +236,69 @@ class LabHazardTests(unittest.TestCase):
         self.assertLess(DEFAULT_REWARDS["shockHit"], DEFAULT_REWARDS["spikeHit"])
 
 
+class WorldSizeTests(unittest.TestCase):
+    """Rooms are no longer always 17 x 17: width and depth are per level."""
+
+    def test_long_levels_are_rectangular_with_a_door_in_the_wall(self):
+        from backend.levels import CAMPAIGN_SPECS, boundary_walls
+        self.assertGreaterEqual(len(CAMPAIGN_SPECS), 10)
+        sizes = set()
+        for index in range(len(CAMPAIGN_SPECS)):
+            level = make_level(index)
+            w, d = level["width"], level["depth"]
+            sizes.add((w, d))
+            door = level["exitDoor"]
+            self.assertTrue(door[0] in (0, w - 1) or door[1] in (0, d - 1), f"{level['name']}: door must be in the outer wall")
+            self.assertEqual(len(boundary_walls(door, w, d)), 2 * (w + d) - 4 - 1)
+            self.assertTrue(1 <= level["start"][0] <= w - 2 and 1 <= level["start"][1] <= d - 2)
+        self.assertGreater(len(sizes), 3)
+
+    def test_environment_uses_the_level_dimensions(self):
+        levels = [make_level(i) for i in range(6, 10)]
+        env = WorldEnvironment(levels)
+        for index, level in enumerate(levels):
+            obs = env.reset(index)
+            self.assertEqual((env.size_x, env.size_z), (level["width"], level["depth"]))
+            self.assertEqual(len(obs), OBSERVATION_SIZE)
+        self.assertNotEqual(env.size_x, env.size_z)
+
+    def test_stray_doors_snap_to_the_nearest_wall(self):
+        from backend.levels import snap_door_to_wall
+        self.assertEqual(snap_door_to_wall([8, 15], 17, 17), [8, 16])
+        self.assertEqual(snap_door_to_wall([1, 8], 17, 17), [0, 8])
+        self.assertEqual(snap_door_to_wall([8, 16], 17, 17), [8, 16])
+        self.assertEqual(snap_door_to_wall([0, 0], 17, 17), [0, 2])   # never in a corner
+
+    def test_old_levels_migrate_to_explicit_dimensions(self):
+        level = migrate_level({"size": 13, "exitDoor": [6, 11], "walls": [], "start": [6, 2]})
+        self.assertEqual((level["width"], level["depth"]), (13, 13))
+        self.assertEqual(level["exitDoor"], [6, 12])
+
+
+LONG_LEVEL_SOLUTIONS = {
+    6: [0, 3, 3, 3, 5, 6, 0, 0, 0, 0, 0, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 6, 2, 2, 2, 2, 1, 1, 1, 2, 2, 4, 4, 6, 0, 0, 0, 0, 0, 3, 3, 1, 1, 1, 1, 1, 3, 1, 1, 1, 1, 1, 1, 1],
+    7: [0, 0, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0, 2, 2, 2, 2, 4, 0, 0, 0, 0, 0, 0, 3, 3, 3, 1, 1, 1, 3, 3, 4, 4, 6, 0, 0, 0, 0, 0, 2, 2, 6, 1, 2, 2, 2, 7, 1, 1, 1, 1, 1, 4, 6, 6, 4, 4, 1, 3, 4, 4, 0, 4, 3, 4, 4, 0, 2],
+    8: [0, 0, 3, 4, 4, 4, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 2, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 4, 3, 0, 3, 3, 6, 3, 1, 3, 3],
+    9: [0, 0, 3, 6, 6, 6, 0, 3, 3, 3, 3, 3, 5, 6, 6, 6, 6, 0, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 4, 4, 6, 0, 0, 0, 3, 3, 3, 3, 3, 1, 7, 1, 1, 1, 1, 1, 1, 1, 5, 6, 4, 4, 4, 4, 4, 4, 4, 4, 8, 6, 0, 0, 6, 0],
+}
+
+
+class LongLevelSolutionTests(unittest.TestCase):
+    """Levels 7-10 are long and winding.  These recorded action lists (found with solver.py) must still clear them."""
+
+    def test_recorded_solutions_clear_the_long_levels(self):
+        for index, actions in LONG_LEVEL_SOLUTIONS.items():
+            level = make_level(index)
+            env = WorldEnvironment([level], {"seed": 3, "randomPhase": False})
+            env.reset(0)
+            result = None
+            for action in actions:
+                result = env.step(action)
+                self.assertFalse(result["death"], f"{level['name']}: died during the recorded run")
+                if result["done"]:
+                    break
+            self.assertTrue(result and result["done"] and result["success"], f"{level['name']}: recorded run no longer clears the level")
+
+
 if __name__ == "__main__":
     unittest.main()

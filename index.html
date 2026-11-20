@@ -3,172 +3,60 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#0b1220" />
+    <meta name="theme-color" content="#0a0f1c" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' http://127.0.0.1:5050; worker-src 'self' blob:; media-src 'self' blob:; object-src 'none'; base-uri 'self'" />
     <title>The-ReaL-Exit · Deeba's Skyway</title>
     <link rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="ui-glass.css">
   </head>
-  <body>
+  <body data-page="home">
     <div id="world3d" aria-label="Three-dimensional Skyway world"></div>
-    <div class="desktop-shell">
-      <nav class="sidebar" aria-label="Main navigation">
-        <div class="brand">
-          <div class="mark">◈</div>
-          <div>
-            <strong>The-ReaL-Exit</strong><small>BUILD · PLAY · DISCOVER</small>
+    <div class="ui-shell" id="uiShell">
+      <div class="app-main ui-main" id="appMain">
+        <div class="ui-top" id="uiTop">
+          <button class="ui-back" id="backBtn" data-go="home" aria-label="Back to the main menu">‹ <span>Back</span></button>
+          <b class="ui-title" id="breadcrumb">Home</b>
+          <div class="ui-top-right">
+            <button class="wallet-pill" data-go="shop" title="Open the wardrobe">◉ <b id="walletCount">0</b> coins</button>
+            <button class="ui-gear" id="settingsBtn" data-go="settings" aria-label="Settings" title="Settings">⚙</button>
           </div>
         </div>
-        <div class="nav-label">Workspace</div>
-        <div class="nav-list">
-          <button class="nav-btn active" data-page="home">
-            <span class="nav-icon">⌂</span><span class="nav-text">Home</span>
-          </button>
-          <button class="nav-btn" data-page="play">
-            <span class="nav-icon">▶</span><span class="nav-text">Play</span>
-          </button>
-          <button class="nav-btn" data-page="build">
-            <span class="nav-icon">⌘</span
-            ><span class="nav-text">World Editor</span>
-          </button>
-          <button class="nav-btn" data-page="worlds">
-            <span class="nav-icon">▦</span
-            ><span class="nav-text">My Worlds</span>
-          </button>
-          <button class="nav-btn" data-page="ai">
-            <span class="nav-icon">✳</span><span class="nav-text">AI Lab</span>
-          </button>
-          <button class="nav-btn" data-page="shop"><span class="nav-icon">◇</span><span class="nav-text">Wardrobe</span></button>
-          <button class="nav-btn" data-page="achievements"><span class="nav-icon">★</span><span class="nav-text">Achievements</span></button>
-        </div>
-        <div class="sidebar-bottom">
-          <div class="nav-label" style="padding-top: 20px">Preferences</div>
-          <button class="nav-btn" data-page="settings">
-            <span class="nav-icon">⚙</span
-            ><span class="nav-text">Settings</span>
-          </button>
-          <div class="profile">
-            <div class="avatar">WF</div>
-            <div>
-              <strong>World Builder</strong><small>Local workspace</small>
-            </div>
-          </div>
-        </div>
-      </nav>
-      <div class="app-main" id="appMain">
-        <header class="topbar">
-          <div class="crumb">
-            The-ReaL-Exit <span style="color: #52657b"> / </span>
-            <b id="breadcrumb">Home</b>
-          </div>
-          <div class="top-actions">
-            <button class="wallet-pill" data-go="shop" title="Open coin shop">◉ <b id="walletCount">0</b> COINS</button>
-            <span class="top-status"><i></i>LOCAL WORLD</span
-            ><button
-              class="top-icon"
-              id="topResetBtn"
-              title="Reset current run"
-            >
-              ↻
-            </button>
-          </div>
-        </header>
-        <main class="content">
+        <main class="content ui-content">
           <section class="app-page active" id="home-page">
-            <div class="home-hero">
-              <div class="hero-copy">
-                <div class="eyebrow">YOUR WORLD STARTS HERE</div>
-                <h1>Meet Deeba.<br />Find the way out.</h1>
-                <p>
-                  Escape six CatLab test chambers: push crates onto hold-plates, ride lever-powered lifts,
-                  jump onto ledges, dodge lasers, shocks, saw cutters and acid, and dress Deeba up in the wardrobe.
-                </p>
-                <div class="button-row">
-                  <button class="tool primary" id="homePlayBtn">
-                    ▶ &nbsp; Continue adventure</button
-                  ><button class="tool secondary" id="homeBuildBtn">
-                    Open world editor
-                  </button>
-                </div>
-              </div>
-              <div class="hero-art" aria-hidden="true"></div>
+            <div class="home-title">
+              <h1>The ReaL Exit</h1>
+              <p>Deeba's lab escape</p>
             </div>
-            <div class="home-stats">
-              <div class="home-stat">
-                <div class="label">CAMPAIGN</div>
-                <strong id="homeCampaignCount">09</strong><small>Linked puzzle rooms</small>
+            <nav class="dock" aria-label="Main menu">
+              <button class="dock-btn primary" id="homePlayBtn"><i>▶</i><span>Play</span></button>
+              <button class="dock-btn" data-go="levels"><i>▦</i><span>Levels</span></button>
+              <button class="dock-btn" data-go="build"><i>⌘</i><span>Build</span></button>
+              <button class="dock-btn" data-go="ai"><i>✳</i><span>AI Lab</span></button>
+              <button class="dock-btn" data-go="shop"><i>◇</i><span>Wardrobe</span></button>
+              <button class="dock-btn" data-go="achievements"><i>★</i><span>Awards</span></button>
+            </nav>
+            <span hidden><b id="homeCampaignCount"></b><b id="homeSparks"></b></span>
+          </section>
+
+          <section class="app-page" id="levels-page">
+            <div class="levels-head">
+              <div class="segmented" id="levelsMode" aria-label="What to do with a level">
+                <button class="seg-btn active" data-levels-mode="play">▶ Play</button><button class="seg-btn" data-levels-mode="build">⌘ Build</button>
               </div>
-              <div class="home-stat">
-                <div class="label">LEVELS</div>
-                <strong id="homeSparks">1 / 9</strong
-                ><small>Current campaign position</small>
-              </div>
-              <div class="home-stat">
-                <div class="label">PUZZLE</div>
-                <strong>PLATE → DOOR</strong
-                ><small>Then cross to the next room</small>
-              </div>
-              <div class="home-stat">
-                <div class="label">EDITOR</div>
-                <strong>+</strong><small>Build and add your own levels</small>
+              <p class="levels-hint" id="levelsHint">Pick a level to play.</p>
+              <div class="button-row">
+                <button class="tool" id="importWorldBtn">Import</button><input id="importWorldFile" type="file" accept="application/json,.json" hidden />
+                <button class="tool primary" id="newLevelBtn" hidden>＋ New level</button>
               </div>
             </div>
-            <div class="home-grid">
-              <div>
-                <div class="section-title">
-                  <h2>Pick up where you left off</h2>
-                  <button class="text-link" data-go="worlds">
-                    View all worlds &nbsp;→
-                  </button>
-                </div>
-                <article class="surface-card recent-card">
-                  <div class="world-thumb"></div>
-                  <div class="recent-info">
-                    <h3>The Pressure Run</h3>
-                    <p>Six lab chambers · lasers, shocks, cutters and acid</p>
-                    <div class="recent-actions">
-                      <button class="tool primary" id="recentPlayBtn">
-                        Start campaign</button
-                      ><span class="mini-meta">17 × 17 GRID</span>
-                    </div>
-                  </div>
-                </article>
-              </div>
-              <div>
-                <div class="section-title">
-                  <h2>Quick access</h2>
-                  <span class="mini-meta">YOUR WORKSPACE</span>
-                </div>
-                <div class="quick-stack">
-                  <button class="surface-card quick-card" data-go="build">
-                    <span class="quick-icon">⌘</span
-                    ><span
-                      ><h3>Shape a new path</h3>
-                      <p>Open the editor and change your world</p></span
-                    ><span class="quick-arrow">→</span>
-                  </button>
-                  <button class="surface-card quick-card" data-go="build">
-                    <span
-                      class="quick-icon"
-                      style="background: #2a2534; color: #c7a9f5"
-                      >＋</span
-                    ><span
-                      ><h3>Add another level</h3>
-                      <p>
-                        Build a standalone challenge or extend the campaign
-                      </p></span
-                    ><span class="quick-arrow">→</span>
-                  </button>
-                </div>
-              </div>
-            </div>
+            <div class="level-grid" id="levelGrid"></div>
           </section>
 
           <section class="app-page" id="world-page">
             <div class="page-heading">
               <div>
                 <div class="eyebrow" id="worldEyebrow">
-                  CAMPAIGN · LEVEL 1 OF 9
+                  CAMPAIGN · LEVEL 1
                 </div>
                 <h1 id="worldTitle">Level 1</h1>
                 <p id="worldDescription">
@@ -263,39 +151,25 @@
                   <h2>Level panel</h2>
                   <span id="panelLevelCount">04 LEVELS</span>
                 </div>
-                <div
-                  class="section"
-                  id="campaignEditorSection"
-                  style="display: none"
-                >
-                  <div class="label">
-                    LEVELS
-                    <span id="levelCount" style="float: right">4 LEVELS</span>
+                <div class="section" id="campaignEditorSection" style="display: none">
+                  <div class="label">LEVEL <span id="levelCount" style="float: right">1 LEVEL</span></div>
+                  <div class="button-row wrap">
+                    <button class="tool" data-go="levels" id="allLevelsBtn">▦ All levels</button>
+                    <button class="tool" id="addLevelBtn">＋ New</button>
                   </div>
-                  <div id="levelList" class="level-list"></div>
-                  <button
-                    class="tool"
-                    id="addLevelBtn"
-                    style="width: 100%; margin-top: 9px"
-                  >
-                    ＋ Add level</button>
-                  <button class="tool primary" id="generateChallengeBtn" style="width:100%;margin-top:8px">✦ Generate experimental chamber</button>
-                  <label class="progress-note standalone-toggle"
-                    ><input id="standaloneLevel" type="checkbox" /> Play this as
-                    a standalone level</label
-                  ><label
-                    class="progress-note"
-                    style="display: block; margin-top: 12px"
-                    >Rotator speed
-                    <input
-                      id="rotatorSpeed"
-                      type="range"
-                      min="0.4"
-                      max="2.8"
-                      step="0.1"
-                      value="1"
-                      style="width: 100%"
-                  /></label>
+                  <div class="label" style="margin-top:16px">WORLD SIZE <span id="worldSizeLabel" style="float:right">17 × 17</span></div>
+                  <div class="size-grid">
+                    <label>Width<span class="stepper"><button type="button" data-size="w" data-d="-2" aria-label="Narrower">−</button><input id="worldW" type="number" min="9" max="41" step="1" value="17" /><button type="button" data-size="w" data-d="2" aria-label="Wider">+</button></span></label>
+                    <label>Depth<span class="stepper"><button type="button" data-size="d" data-d="-2" aria-label="Shallower">−</button><input id="worldD" type="number" min="9" max="41" step="1" value="17" /><button type="button" data-size="d" data-d="2" aria-label="Deeper">+</button></span></label>
+                  </div>
+                  <div class="chip-row size-presets">
+                    <button class="chip" data-preset="13x13">Small</button><button class="chip" data-preset="17x17">Medium</button><button class="chip" data-preset="25x25">Large</button><button class="chip" data-preset="15x31">Long</button><button class="chip" data-preset="29x21">Wide</button>
+                  </div>
+                  <div class="progress-note">Rooms grow toward the far and right sides. The wall, the exit gate and the camera adapt; anything left outside is removed.</div>
+                  <button class="tool primary" id="generateChallengeBtn" style="width:100%;margin-top:12px">✦ Generate experimental chamber</button>
+                  <label class="progress-note standalone-toggle"><input id="standaloneLevel" type="checkbox" /> Play this as a standalone level</label>
+                  <label class="progress-note" style="display: block; margin-top: 12px">Rotator speed
+                    <input id="rotatorSpeed" type="range" min="0.4" max="2.8" step="0.1" value="1" style="width: 100%" /></label>
                 </div>
                 <div class="section" id="buildToolsSection">
                   <div class="label">LEVEL TOOLS</div>
@@ -339,7 +213,7 @@
                   <div class="world-row">
                     Active room <span id="activeLevelName">Level 1</span>
                   </div>
-                  <div class="world-row">Grid size <span>17 × 17</span></div>
+                  
                   <div class="world-row">
                     Placed pieces <span id="objectCount">0</span>
                   </div>
@@ -371,53 +245,6 @@
                   saves stay on this computer.
                 </div>
               </aside>
-            </div>
-          </section>
-
-          <section class="app-page" id="worlds-page">
-            <div class="page-heading">
-              <div>
-                <div class="eyebrow">YOUR CREATIONS</div>
-                <h1>My Worlds</h1>
-                <p>Your saved worlds live here on this computer.</p>
-              </div>
-              <div class="button-row"><button class="tool" id="importWorldBtn">Import level JSON</button><input id="importWorldFile" type="file" accept="application/json,.json" hidden /><button class="tool primary" data-go="build">⌘ &nbsp; Open editor</button></div>
-            </div>
-            <div class="library-grid">
-              <article class="surface-card library-card">
-                <div class="library-art"></div>
-                <div class="library-copy">
-                  <h3>The Pressure Run</h3>
-                  <p>Eight rooms with coins, timing hazards and pressure routes.</p>
-                  <div class="library-meta">
-                    <span>CAMPAIGN</span><span>17 × 17</span>
-                  </div>
-                  <div class="button-row" style="margin-top: 14px">
-                    <button class="tool primary" id="libraryPlayBtn">
-                      Play</button
-                    ><button class="tool" id="libraryBuildBtn">
-                      Edit levels
-                    </button>
-                  </div>
-                </div>
-              </article>
-              <article class="surface-card placeholder">
-                <div>
-                  <div class="quick-icon">＋</div>
-                  <h2>Add a standalone challenge</h2>
-                  <p>
-                    Create a level in the editor, mark it as standalone, and
-                    export its JSON for sharing.
-                  </p>
-                  <button
-                    class="tool secondary"
-                    style="margin-top: 16px"
-                    data-go="build"
-                  >
-                    Open editor
-                  </button>
-                </div>
-              </article>
             </div>
           </section>
 

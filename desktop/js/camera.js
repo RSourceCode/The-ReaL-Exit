@@ -36,6 +36,7 @@ export class CameraController {
     this.initialized = false;
     this.shakeAmount = 0;
     this.menuOrbit = false;
+    this.roomScale = 1;      // bigger rooms pull the iso / top / menu cameras back (set by main.js)
     this.drag = null;
     this.pointerMoved = false;
     this.canControl = () => true;
@@ -60,7 +61,7 @@ export class CameraController {
     if (playerBody) this.playerBody = playerBody;
     try { localStorage.setItem(CAMERA_KEY, view); } catch { /* optional */ }
     const p = PRESETS[view];
-    this.phi = p.phi; this.radius = p.radius || this.radius;
+    this.phi = p.phi; this.radius = (p.radius || this.radius) * (view === 'follow' ? 1 : this.roomScale);
     if (view === 'top') this.theta = Math.PI;
     if (view === 'iso') this.theta = Math.PI + 0.7;
     if (view === 'first') this.pitch = 0;
@@ -91,7 +92,7 @@ export class CameraController {
     const chest = new THREE.Vector3(pos.x, pos.y + 0.25, pos.z);
     const centre = new THREE.Vector3(0, 0.4, 0);
     const target = centre.clone().lerp(chest, this.menuOrbit ? 0.15 : preset.follow);
-    if (this.menuOrbit) { this.phi += (0.95 - this.phi) * 0.05; this.radius += (17 - this.radius) * 0.05; }
+    if (this.menuOrbit) { this.phi += (0.95 - this.phi) * 0.05; this.radius += (17 * this.roomScale - this.radius) * 0.05; }
     if (!this.initialized) this.focus.copy(target); else this.focus.lerp(target, 1 - Math.exp(-dt * 5.5));
 
     const speed = Math.hypot(player.vx || 0, player.vz || 0);
@@ -167,7 +168,7 @@ export class CameraController {
     el.addEventListener('wheel', (event) => {
       event.preventDefault();
       const p = PRESETS[this.view];
-      if (p.max) this.radius = THREE.MathUtils.clamp(this.radius + event.deltaY * 0.008, p.min, p.max);
+      if (p.max) this.radius = THREE.MathUtils.clamp(this.radius + event.deltaY * 0.008, p.min, p.max * (this.view === 'follow' ? 1 : this.roomScale));
     }, { passive: false });
     el.addEventListener('contextmenu', (event) => event.preventDefault());
   }

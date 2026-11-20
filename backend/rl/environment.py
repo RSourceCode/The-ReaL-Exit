@@ -165,7 +165,9 @@ class WorldEnvironment:
         self.level: Dict[str, Any] = {}
         self.level_steps = 0.0
         self.time_limit_steps = 1
-        self.size = 13
+        self.size = 13          # longest side (used only to normalise the compass)
+        self.size_x = 13
+        self.size_z = 13
         self.position = [0, 0]
         self.heading = 0
         self.walls: Set[Cell] = set()
@@ -264,8 +266,11 @@ class WorldEnvironment:
         self._hazard_cache = {}
         self.level_steps = 0.0
         self.time_limit_steps = math.ceil(float(level.get("timeLimit", LEVEL_TIME_LIMIT_SECONDS)) / RL_ACTION_DURATION_SECONDS)
-        self.size = int(level.get("size", 13))
-        start_cell = level.get("start") or [self.size // 2, 1]
+        legacy = int(level.get("size", 13))
+        self.size_x = max(5, int(level.get("width", legacy)))
+        self.size_z = max(5, int(level.get("depth", legacy)))
+        self.size = max(self.size_x, self.size_z)
+        start_cell = level.get("start") or [self.size_x // 2, 1]
         self.position = [int(start_cell[0]), int(start_cell[1])]
         self.heading = 0
 
@@ -296,7 +301,7 @@ class WorldEnvironment:
         self.lever_rewarded = False
         self.climbed = set()
 
-        door = level.get("exitDoor") or level.get("goal") or [self.size // 2, self.size - 1]
+        door = level.get("exitDoor") or level.get("goal") or [self.size_x // 2, self.size_z - 1]
         self.exit_door = [int(door[0]), int(door[1])]
         self._exit_door_key = (self.exit_door[0], self.exit_door[1])
         self.doors_open = True  # recomputed in _load_channels
@@ -330,9 +335,8 @@ class WorldEnvironment:
             cell = (int(c[0]), int(c[1]))
             h = float((props.get(f"platform:{cell[0]}:{cell[1]}") or {}).get("height", PLATFORM_DEFAULT_HEIGHT))
             self.static_height[cell] = h + PLATFORM_TOP_PAD
-        size = self.size
         for cell in list(self.walls):
-            if cell[0] in (0, size - 1) or cell[1] in (0, size - 1):
+            if cell[0] in (0, self.size_x - 1) or cell[1] in (0, self.size_z - 1):
                 continue  # the outer fence is never climbable
             p = props.get(f"wall:{cell[0]}:{cell[1]}") or {}
             h = float(p.get("height", 1.9))
@@ -457,10 +461,10 @@ class WorldEnvironment:
         if hit is not None:
             return hit
         out: Dict[Cell, List[str]] = {}
-        size = self.size
+        sx, sz = self.size_x, self.size_z
 
         def add(cell, kind):
-            if 0 <= cell[0] < size and 0 <= cell[1] < size and kind not in out.get(cell, ()):
+            if 0 <= cell[0] < sx and 0 <= cell[1] < sz and kind not in out.get(cell, ()):
                 out.setdefault(cell, []).append(kind)
 
         for i, (cx, cz, sweep, _rng, half, beam, _y, _sp) in enumerate(self.lasers):
@@ -637,14 +641,14 @@ class WorldEnvironment:
 
     # ── Static observation tensor ──────────────────────────────────────────────────────
     def _build_static(self) -> None:
-        size = self.size
-        st = np.zeros((STATIC_CHANNELS, size + 2 * PAD, size + 2 * PAD), dtype=np.float32)
+        sx, sz = self.size_x, self.size_z
+        st = np.zeros((STATIC_CHANNELS, sx + 2 * PAD, sz + 2 * PAD), dtype=np.float32)
         st[CH_WALL] = 1.0
-        st[CH_WALL, PAD:PAD + size, PAD:PAD + size] = 0.0
+        st[CH_WALL, PAD:PAD + sx, PAD:PAD + sz] = 0.0
 
         def mark(channel: int, cells, value: float = 1.0) -> None:
             for (cx, cz) in cells:
-                if 0 <= cx < size and 0 <= cz < size:
+                if 0 <= cx < sx and 0 <= cz < sz:
                     st[channel, cx + PAD, cz + PAD] = value
 
         mark(CH_WALL, self.walls)
@@ -691,7 +695,7 @@ class WorldEnvironment:
     def _sync_dynamic(self) -> None:
         """Refresh channels that change during play (blocks, coins, plates, door, switch)."""
         st = self._static
-        size = self.size
+        sx, sz = self.size_x, self.size_z
         st[CH_BLOCK] = 0.0
         st[CH_COIN] = 0.0
         st[CH_PLATE] = 0.0
@@ -699,7 +703,7 @@ class WorldEnvironment:
         st[CH_DOOR_OPEN] = 0.0
         st[CH_SWITCH] = 0.0
         for (cx, cz) in self.blocks:
-            if 0 <= cx < size and 0 <= cz < size:
+            if 0 <= cx < sx and 0 <= cz < sz:
                 st[CH_BLOCK, cx + PAD, cz + PAD] = 1.0
         for i, c in enumerate(self.coins):
             if not (self.coin_mask & (1 << i)):
@@ -731,7 +735,7 @@ class WorldEnvironment:
     # ── Shortest-path distance field (the "compass") ───────────────────────────────────
     def _standable(self, x: int, z: int) -> bool:
         """Cells the agent can safely stand on, ignoring (time-varying) rotating bars."""
-        if x < 0 or z < 0 or x >= self.size or z >= self.size:
+        if x < 0 or z < 0 or x >= self.size_x or z >= self.size_z:
             return False
         c = (x, z)
         if c in self.walls or c in self.blocks or c in self.hazards or c in self.movers or c in self.rotators:
@@ -750,12 +754,12 @@ class WorldEnvironment:
 
     def _field(self, targets: List[Cell], lever_assumed: bool) -> List[float]:
         """Dijkstra distance (in action-ish units) from every cell to the nearest target."""
-        size = self.size
-        dist = [INF] * (size * size)
+        sx, sz = self.size_x, self.size_z
+        dist = [INF] * (sx * sz)
         heap: List[Tuple[float, int, int]] = []
         for (tx, tz) in targets:
-            if 0 <= tx < size and 0 <= tz < size:
-                dist[tx * size + tz] = 0.0
+            if 0 <= tx < sx and 0 <= tz < sz:
+                dist[tx * sz + tz] = 0.0
                 heap.append((0.0, tx, tz))
         heapq.heapify(heap)
         jumpables = self.hazards | self.rotators | self.movers
@@ -763,7 +767,7 @@ class WorldEnvironment:
         height = lambda c: self._static_cell_height(c, lever_assumed)  # noqa: E731
         while heap:
             d, x, z = heapq.heappop(heap)
-            if d > dist[x * size + z]:
+            if d > dist[x * sz + z]:
                 continue
             hx = height((x, z))
             for fx, fz in _DIRS:
@@ -772,14 +776,14 @@ class WorldEnvironment:
                     kind = self._climb_kind(height((nx, nz)), hx)
                     if kind != 2:
                         cost = d + (1.0 if kind == 0 else CLIMB_COST)
-                        if cost < dist[nx * size + nz]:
-                            dist[nx * size + nz] = cost
+                        if cost < dist[nx * sz + nz]:
+                            dist[nx * sz + nz] = cost
                             heapq.heappush(heap, (cost, nx, nz))
                 # A jump launched from (x - 2f) over a hazard at (x - f) lands here.
                 if (x - fx, z - fz) in jumpables:
                     ax, az = x - 2 * fx, z - 2 * fz
-                    if standable(ax, az) and self._climb_kind(height((ax, az)), hx) != 2 and d + JUMP_COST < dist[ax * size + az]:
-                        dist[ax * size + az] = d + JUMP_COST
+                    if standable(ax, az) and self._climb_kind(height((ax, az)), hx) != 2 and d + JUMP_COST < dist[ax * sz + az]:
+                        dist[ax * sz + az] = d + JUMP_COST
                         heapq.heappush(heap, (d + JUMP_COST, ax, az))
         return dist
 
@@ -793,11 +797,11 @@ class WorldEnvironment:
         self._plates_remaining = len(targets)
         if not targets:
             targets = [self._exit_door_key]
-        size = self.size
+        sx, sz = self.size_x, self.size_z
         self._lever_needed = False
         if self.lifts and not all(self.lift_powered(i) for i in range(len(self.lifts))):
             dist = self._field(targets, False)
-            here = self.position[0] * size + self.position[1]
+            here = self.position[0] * sz + self.position[1]
             if dist[here] >= INF and self.levers:
                 targets = sorted(self.levers)
                 dist = self._field(targets, False)
@@ -806,12 +810,12 @@ class WorldEnvironment:
             dist = self._field(targets, bool(self.lifts))
         self._targets = targets
         self._dist = dist
-        self._dist_np = np.array(dist, dtype=np.float64).reshape(size, size)
+        self._dist_np = np.array(dist, dtype=np.float64).reshape(sx, sz)
 
     def _dist_at(self, x: int, z: int) -> float:
-        if x < 0 or z < 0 or x >= self.size or z >= self.size:
+        if x < 0 or z < 0 or x >= self.size_x or z >= self.size_z:
             return INF
-        return self._dist[x * self.size + z]
+        return self._dist[x * self.size_z + z]
 
     # ── Rotating bars ──────────────────────────────────────────────────────────────────
     def _rotator_matrix(self, xs, zs, times, jump_heights) -> np.ndarray:
@@ -1011,7 +1015,7 @@ class WorldEnvironment:
     # ── Dynamics ───────────────────────────────────────────────────────────────────────
     def _static_blocked(self, x: int, z: int) -> bool:
         """Check walls, blocks, and sealed doors without moving obstacles."""
-        if x < 0 or z < 0 or x >= self.size or z >= self.size:
+        if x < 0 or z < 0 or x >= self.size_x or z >= self.size_z:
             return True
         k = (x, z)
         return k in self.walls or k in self.blocks or (k == self._exit_door_key and not self.doors_open)
@@ -1156,7 +1160,7 @@ class WorldEnvironment:
             if key in self.blocks:
                 beyond = (nx + move[0], nz + move[1])
                 beyond_blocked = (
-                    beyond[0] < 0 or beyond[1] < 0 or beyond[0] >= self.size or beyond[1] >= self.size
+                    beyond[0] < 0 or beyond[1] < 0 or beyond[0] >= self.size_x or beyond[1] >= self.size_z
                     or beyond in self.walls or beyond in self.blocks
                     or (beyond == self._exit_door_key and not self.doors_open)
                 )

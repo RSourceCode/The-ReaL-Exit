@@ -4,7 +4,7 @@
  */
 
 import * as THREE from '../../node_modules/three/build/three.module.js';
-import { GRID_SIZE, propertyKey, WALL_TOP_PAD } from './constants.js';
+import { GRID_W, GRID_D, propertyKey, WALL_TOP_PAD } from './constants.js';
 
 /**
  * Create a MeshStandardMaterial with default roughness and metalness.
@@ -48,7 +48,7 @@ export function addBox(group, size, position, color, opts = {}) {
  * Retrieve configured or default visual and physical properties for a level object.
  */
 export function getObjectProperties(world, kind, cell) {
-  const borderWall = kind === 'wall' && (cell[0] === 0 || cell[0] === GRID_SIZE - 1 || cell[1] === 0 || cell[1] === GRID_SIZE - 1);
+  const borderWall = kind === 'wall' && (cell[0] === 0 || cell[0] === GRID_W - 1 || cell[1] === 0 || cell[1] === GRID_D - 1);
   const defaults = kind === 'wall'
     ? (borderWall ? { height: 8.5, size: 1, color: '#965a32', collision: true } : { height: 1.9, size: 0.94, color: '#8d8f98', collision: true })
     : kind === 'block'
@@ -96,7 +96,7 @@ export function surfaceHeightAt(world, gx, gz) {
     if (props.collision !== false) top = props.height + 0.12;
   }
   // Walls count as surfaces too, so coins, crates, plates, levers and power-ups can sit on top of them.
-  const border = gx === 0 || gz === 0 || gx === GRID_SIZE - 1 || gz === GRID_SIZE - 1;
+  const border = gx === 0 || gz === 0 || gx === GRID_W - 1 || gz === GRID_D - 1;
   if (!border && (world.walls || []).some(([x, z]) => x === gx && z === gz)) {
     const props = getObjectProperties(world, 'wall', [gx, gz]);
     if (props.collision !== false) top = Math.max(top, props.height + WALL_TOP_PAD);

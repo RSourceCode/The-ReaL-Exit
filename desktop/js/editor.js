@@ -14,7 +14,7 @@
 
 import * as THREE from '../../node_modules/three/build/three.module.js';
 import {
-  GRID_SIZE, HALF_GRID, LIFT_DEFAULT_HEIGHT, CHANNELS, SHOCK_DIRS, gridToWorld, hasCell, propertyKey, laserSpec, shockSpec, cutterSpec,
+  GRID_W, GRID_D, HALF_X, HALF_Z, MIN_GRID, MAX_GRID, LIST_FIELDS, worldDims, doorSide, snapDoorToWall, boundaryWalls, LIFT_DEFAULT_HEIGHT, CHANNELS, SHOCK_DIRS, gridToWorld, hasCell, propertyKey, laserSpec, shockSpec, cutterSpec,
 } from './constants.js';
 import { getObjectProperties, surfaceHeightAt } from './materials.js';
 
@@ -85,8 +85,8 @@ export class LevelEditor {
     if (hit) {
       // Nudge the hit point into the surface so side faces resolve to the cell that was actually clicked.
       const n = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : { x: 0, z: 0 };
-      const gx = Math.round(hit.point.x - n.x * 0.02 + HALF_GRID), gz = Math.round(hit.point.z - n.z * 0.02 + HALF_GRID);
-      if (gx < 0 || gz < 0 || gx >= GRID_SIZE || gz >= GRID_SIZE) return;
+      const gx = Math.round(hit.point.x - n.x * 0.02 + HALF_X), gz = Math.round(hit.point.z - n.z * 0.02 + HALF_Z);
+      if (gx < 0 || gz < 0 || gx >= GRID_W || gz >= GRID_D) return;
       this.selectedCell = { gx, gz };
       if (cursorMesh) {
         const p = gridToWorld(gx, gz);
@@ -147,12 +147,17 @@ export class LevelEditor {
       if (world.exitDoor && same(world.exitDoor, cell.gx, cell.gz)) world.exitDoor = null;
       world.start = [cell.gx, cell.gz];
     } else if (this.selectedTool === 'door') {
+      // The gate is a built-in airlock of the outer wall: wherever you click, it snaps to the nearest wall
+      // (kept clear of the corners) so it can never float in the middle of the room.
+      const { w, d } = worldDims(world);
       const old = world.exitDoor;
-      if (old && !same(old, cell.gx, cell.gz) && (old[0] === 0 || old[0] === GRID_SIZE - 1 || old[1] === 0 || old[1] === GRID_SIZE - 1)) world.walls.push([...old]);
-      world.exitDoor = [cell.gx, cell.gz];
-      world.goal = [...world.exitDoor];
-      world.walls = world.walls.filter((c) => !same(c, cell.gx, cell.gz));
-      strip(all);
+      const next = snapDoorToWall([cell.gx, cell.gz], w, d);
+      if (old && !same(old, next[0], next[1])) world.walls.push([...old]);
+      world.exitDoor = next;
+      world.goal = [...next];
+      world.walls = world.walls.filter((c) => !same(c, next[0], next[1]));
+      for (const n of all) world[n] = (world[n] || []).filter((c) => !same(c, next[0], next[1]));
+      this.toast('Exit gate placed in the wall');
     } else if (this.selectedTool === 'erase') {
       strip(all);
       world.painted = (world.painted || []).filter((c) => !same(c, cell.gx, cell.gz));
@@ -205,10 +210,43 @@ export class LevelEditor {
     world.objectProperties[key] = next;
   }
 
+  /**
+   * Resize the whole room.  The grid origin stays at the near-left corner, so the room grows / shrinks toward
+   * +X / +Z.  Pieces that no longer fit are dropped, the outer wall is rebuilt and the gate keeps to its wall.
+   * Returns true when something changed.
+   */
+  resizeWorld(world, newW, newD) {
+    const { w: oldW, d: oldD } = worldDims(world);
+    newW = clamp(Math.round(newW) || oldW, MIN_GRID, MAX_GRID); newD = clamp(Math.round(newD) || oldD, MIN_GRID, MAX_GRID);
+    if (newW === oldW && newD === oldD) return false;
+    const side = doorSide(world.exitDoor, oldW, oldD) || 'z1';
+    const along = side[0] === 'z' ? world.exitDoor?.[0] ?? (oldW >> 1) : world.exitDoor?.[1] ?? (oldD >> 1);
+    const inside = (c) => c[0] >= 1 && c[1] >= 1 && c[0] <= newW - 2 && c[1] <= newD - 2;
+    for (const key of LIST_FIELDS) {
+      if (!Array.isArray(world[key])) continue;
+      world[key] = key === 'walls'
+        ? world.walls.filter((c) => c[0] > 0 && c[1] > 0 && c[0] < oldW - 1 && c[1] < oldD - 1 && inside(c))
+        : world[key].filter(inside);
+    }
+    if (Array.isArray(world.painted)) world.painted = world.painted.filter(inside);
+    for (const key of Object.keys(world.objectProperties || {})) {
+      const [, x, z] = key.split(':').map((v, i) => (i ? Number(v) : v));
+      if (Number.isFinite(x) && Number.isFinite(z) && !inside([x, z])) delete world.objectProperties[key];
+    }
+    world.width = newW; world.depth = newD; world.size = Math.max(newW, newD);
+    const clampAlong = (v, len) => clamp(v, 2, len - 3);
+    world.exitDoor = side === 'z1' ? [clampAlong(along, newW), newD - 1] : side === 'z0' ? [clampAlong(along, newW), 0] : side === 'x1' ? [newW - 1, clampAlong(along, newD)] : [0, clampAlong(along, newD)];
+    world.goal = [...world.exitDoor];
+    world.walls = boundaryWalls(world.exitDoor, newW, newD).concat(world.walls);
+    world.start = [clamp(world.start[0], 1, newW - 2), clamp(world.start[1], 1, newD - 2)];
+    this.selection = null;
+    return true;
+  }
+
   _move(world, nx, nz) {
     const sel = this.selection;
     if (!sel?.list) return false;
-    if (nx < 0 || nz < 0 || nx >= GRID_SIZE || nz >= GRID_SIZE || same(world.start, nx, nz)) { this.toast('That tile is not available'); return false; }
+    if (nx < 0 || nz < 0 || nx >= GRID_W - 1 || nz >= GRID_D - 1 || nx < 1 || nz < 1 || same(world.start, nx, nz)) { this.toast('That tile is not available'); return false; }
     if ((world[sel.list] || []).some((c) => same(c, nx, nz))) { this.toast('That tile already holds one'); return false; }
     const e = this.entry(world);
     const oldKey = propertyKey(sel.type, [sel.x, sel.z]);
@@ -228,13 +266,13 @@ export class LevelEditor {
     const sel2 = (label, get, set, options) => f.push({ label, kind: 'select', get, set, options });
     const bool = (label, get, set) => f.push({ label, kind: 'bool', get, set });
     if (sel.type !== 'start' && sel.type !== 'door') {
-      num('Tile X', () => sel.x + 1, (v) => this._move(world, Math.round(v) - 1, sel.z), 1, GRID_SIZE, 1);
-      num('Tile Z', () => sel.z + 1, (v) => this._move(world, sel.x, Math.round(v) - 1), 1, GRID_SIZE, 1);
+      num('Tile X', () => sel.x + 1, (v) => this._move(world, Math.round(v) - 1, sel.z), 1, GRID_W, 1);
+      num('Tile Z', () => sel.z + 1, (v) => this._move(world, sel.x, Math.round(v) - 1), 1, GRID_D, 1);
     }
     const t = sel.type;
     if (BOX_TYPES.includes(t)) {
-      num('Width (cells, X)', () => this._props(world).w || 1, (v) => this._setProps(world, { w: clamp(Math.round(v), 1, GRID_SIZE) }), 1, GRID_SIZE, 1);
-      num('Depth (cells, Z)', () => this._props(world).d || 1, (v) => this._setProps(world, { d: clamp(Math.round(v), 1, GRID_SIZE) }), 1, GRID_SIZE, 1);
+      num('Width (cells, X)', () => this._props(world).w || 1, (v) => this._setProps(world, { w: clamp(Math.round(v), 1, GRID_W) }), 1, GRID_W, 1);
+      num('Depth (cells, Z)', () => this._props(world).d || 1, (v) => this._setProps(world, { d: clamp(Math.round(v), 1, GRID_D) }), 1, GRID_D, 1);
     }
     if (t === 'wall' || t === 'platform') {
       num('Height (Y)', () => this._props(world).height, (v) => this._setProps(world, { height: clamp(snap(v, 0.25), 0.25, 4) }), 0.25, 4, 0.25);
@@ -340,7 +378,7 @@ export class LevelEditor {
     const e = this.entry(world);
     if (!e) return [];
     const t = sel.type;
-    const W = (gx, gz) => ({ x: gx - HALF_GRID, z: gz - HALF_GRID });
+    const W = (gx, gz) => ({ x: gx - HALF_X, z: gz - HALF_Z });
     const out = [];
     const add = (id, axis, sign, pos, color, start, apply) => out.push({ id, axis, sign, pos, color, start, apply });
     const X = '#ff6b6b', Y = '#7dff8a', Z = '#6bb5ff';
@@ -352,7 +390,7 @@ export class LevelEditor {
       const x0 = sel.x - 0.5, z0 = sel.z - 0.5;
       const midX = x0 + w / 2, midZ = z0 + d / 2, midY = Math.max(0.2, y1 / 2);
       const resize = (axisKey, sign) => (value, travelled) => {
-        const size = clamp(Math.round(value + travelled), 1, GRID_SIZE);
+        const size = clamp(Math.round(value + travelled), 1, Math.max(GRID_W, GRID_D));
         const patch = axisKey === 'w' ? { w: size } : { d: size };
         if (sign < 0) {
           const grow = size - value; // cells added on the low side

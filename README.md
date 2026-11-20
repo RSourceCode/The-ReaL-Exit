@@ -28,7 +28,8 @@ The renderer runs locally in the desktop window in JavaScript, while all headles
     - `physics.js`: Rapier 3D physics integration, character movement, and collision solvers.
     - `camera.js`: Camera views (Isometric, Top-down, 3rd Person follow, 1st Person).
     - `player.js`: Character controls and keyboard input.
-    - `editor.js`: Level editor tools, cursor placement, and object inspector.
+    - `editor.js`: Level editor tools, cursor placement, object inspector and world resizing.
+    - `deaths.js`, `liquid.js`, `locomotion.js`: per-obstacle death animations, liquid shader, ground/ice movement model.
     - `game.js`: Campaign progression, pressure plates, timers, and win conditions.
     - `rl_client.js`: HTTP API client connecting the UI to the Python RL backend.
     - `rl_ui.js`: AI Lab training dashboard, live canvas reward charts, and parameter controls.
@@ -123,5 +124,9 @@ verified by `backend/tests/solver.py`.
   Implemented in `desktop/js/constants.js` (`CHANNELS`, `channelOf`, `lethalHazard(..., channelsOn)`), `game.js`, `physics.js`,
   `builder.js`, `editor.js` and mirrored in `backend/rl/environment.py` (`channels_on`, `lift_powered`).
 - **Stack anywhere.** Coins, power-ups, crates, plates, levers and crystals can sit on walls and ledges (`surfaceHeightAt`).
-- **17 × 17 rooms** with an S-turn entry; the campaign was re-laid-out and re-verified with `backend/tests/solver.py`.
+- **Rooms of any size.** Every level carries its own `width` × `depth` (9–41 cells; the original six are 17 × 17). The editor's *World size* panel resizes the room, rebuilds the wall and keeps the exit gate on its wall; the camera, shadows and hall scale with the room, and the RL environment (`backend/rl/environment.py`) handles rectangular worlds. Levels 7+ (`backend/levels_long.py`, drawn as ASCII maps) are long winding rooms with turns; they are verified with `backend/tests/solver.py`.
+- **Exit gate.** The gate is part of the outer wall: two sliding panels between solid pillars (`DOOR_SPAN` = 3 wall cells, `DOOR_CLEAR` = 2.4 m). The editor's Door tool snaps to the nearest wall.
+- **Ice.** `desktop/js/locomotion.js` holds the ground / air / ice movement model (unit-testable, no engine dependency). Ice is brisk but skids; stepping on / off it is eased.
+- **Deaths.** `desktop/js/deaths.js` gives every obstacle its own ending (acid dissolves, lasers slice, shocks electrocute and char, cutters tear Deeba into parts, spikes impale and deflate, a timeout powers her down).
+- **Liquids.** `desktop/js/liquid.js` is the shared water / acid / ice surface shader (waves, caustic veins, glints, bubbles, ripples).
 - Natural liquids (acid / water / ice pools), lime shock emitters, slipperier ice and a fixed fullscreen exit.

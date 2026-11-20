@@ -6,7 +6,7 @@
 import * as THREE from '../../node_modules/three/build/three.module.js';
 import RAPIER from '../../node_modules/@dimforge/rapier3d-compat/dist/rapier.mjs';
 
-import { indexToWorld } from './constants.js';
+import { indexToWorld, GRID_W, GRID_D } from './constants.js';
 import { buildBoard, createCursorMesh, createEnvironment } from './builder.js';
 import { createDeeba } from './character.js';
 import { PhysicsManager, RUN_SPEED } from './physics.js';
@@ -20,6 +20,7 @@ import { RLUIController } from './rl_ui.js';
 import { RLPlaybackController } from './rl_playback.js';
 import { AudioFeedback } from './audio.js';
 import { Effects } from './effects.js';
+import { DeathDirector, deathDuration } from './deaths.js';
 import { Wardrobe } from './outfits.js';
 import { WardrobeUI } from './wardrobe_ui.js';
 
@@ -32,10 +33,11 @@ export async function bootstrap() {
 
   const container = $('world3d');
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 220);
+  const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 360);
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
   renderer.shadowMap.enabled = true;
+  renderer.localClippingEnabled = true;     // the laser death slices Deeba with clipping planes
   renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -69,6 +71,7 @@ export async function bootstrap() {
   const audio = new AudioFeedback();
   const wardrobe = new Wardrobe();
   const effects = new Effects(scene);
+  const deaths = new DeathDirector(scene, effects);
   const cameraController = new CameraController(camera, renderer, container, scene);
   const playerController = new PlayerController();
   const editor = new LevelEditor();
@@ -95,20 +98,37 @@ export async function bootstrap() {
   gameManager.onPauseDuration = (duration) => { if (physicsManager.obstaclesFrozenUntil) physicsManager.obstaclesFrozenUntil += duration; };
   gameManager.onCoin = (pos, color = '#ffd36a') => effects.sparkle(pos, color);
   gameManager.onDeath = (cause, pos) => {
-    const mats = playerMesh.userData.mats;
-    effects.burst(pos, [`#${mats.body.color.getHexString()}`, `#${mats.glow.color.getHexString()}`, `#${mats.trim.color.getHexString()}`]);
-    if (cause === 'laser' || cause === 'shock' || cause === 'barrier') effects.zap(pos);
+    // Every obstacle has its own ending (see deaths.js); the live model is hidden and a copy plays the scene.
+    const sp = Math.hypot(player.vx || 0, player.vz || 0);
+    const dir = sp > 0.5 ? { x: player.vx / sp, z: player.vz / sp } : { x: Math.sin(playerMesh.rotation.y), z: Math.cos(playerMesh.rotation.y) };
+    playerMesh.position.set(player.x, player.jumpY + 0.52, player.z);
+    deaths.start(cause, playerMesh, pos, { dir });
     playerMesh.userData.setDead(true);
-    cameraController.shake(0.45);
-    slowUntil = performance.now() + 650;
+    const feel = { acid: [0.08, 0], lava: [0.08, 0], laser: [0.3, 450], barrier: [0.3, 450], shock: [0.35, 350], cutter: [0.55, 500], spikes: [0.25, 350], time: [0.05, 0] }[cause] || [0.4, 500];
+    cameraController.shake(feel[0]);
+    slowUntil = performance.now() + feel[1];
     physicsManager.frozenPlayer = true;
     audio.setMuffled(false);
   };
   gameManager.onRespawn = () => {
+    deaths.clear();
     playerMesh.userData.setDead(false);
     playerMesh.userData.reset();
   };
   gameManager.onAchievement = () => { audio.play('powerup'); ui.toast('Achievement unlocked · view your milestones'); };
+
+  // Bigger (or smaller) rooms: stretch the shadow frustum over the whole room and pull the wide cameras back.
+  let shadowSize = 2048;
+  function fitRoom() {
+    const span = Math.max(GRID_W, GRID_D), half = Math.max(10, span / 2 + 3);
+    Object.assign(sun.shadow.camera, { left: -half, right: half, top: half, bottom: -half, far: 40 + span });
+    sun.shadow.camera.updateProjectionMatrix();
+    const want = span > 25 ? 4096 : 2048;
+    if (want !== shadowSize) { shadowSize = want; sun.shadow.map?.dispose(); sun.shadow.map = null; sun.shadow.mapSize.set(want, want); }
+    const scale = Math.max(1, span / 17), prev = cameraController.roomScale || 1;
+    cameraController.roomScale = scale;
+    if (cameraController.view !== 'follow' && cameraController.view !== 'first') cameraController.radius *= scale / prev;
+  }
 
   function rebuildWorld() {
     const play = gameManager.refreshPlay();
@@ -124,8 +144,10 @@ export async function bootstrap() {
     cameraController.playerBody = physicsManager.playerBody;
     cameraController.occluders = board.occluders;
 
-    player.x = indexToWorld(gameManager.world.start[0]);
-    player.z = indexToWorld(gameManager.world.start[1]);
+    deaths.clear();
+    player.x = indexToWorld(gameManager.world.start[0], 'x');
+    player.z = indexToWorld(gameManager.world.start[1], 'z');
+    fitRoom();
     Object.assign(player, { jumpY: 0, grounded: true, upright: true, speedMultiplier: 1, jumpMultiplier: 1, hazardShield: false, onIce: false, vx: 0, vy: 0, vz: 0 });
     physicsManager.obstaclesFrozenUntil = 0;
     gameClock = 0;
@@ -193,7 +215,7 @@ export async function bootstrap() {
   };
 
   $('restartBtn').addEventListener('click', playerController.onRestart);
-  $('topResetBtn').addEventListener('click', playerController.onRestart);
+  $('topResetBtn')?.addEventListener('click', playerController.onRestart);
   $('completionAction').addEventListener('click', () => {
     if (rlPlayback.isActive) { rlPlayback.stop(); ui.showPage('ai'); }
     else if (gameManager.world.standalone) gameManager.resetRun(false);
@@ -252,7 +274,7 @@ export async function bootstrap() {
 
   // ── Main loop ──────────────────────────────────────────────────────────────────────────────────
   let lastFrame = performance.now();
-  let footstepClock = 0;
+  let footstepClock = 0, iceSprayClock = 0;
   const promptEl = $('interactPrompt');
   function animate(now) {
     requestAnimationFrame(animate);
@@ -279,9 +301,9 @@ export async function bootstrap() {
       board.movingLaserMeshes.forEach((l) => l.setFrozen(frozen));
 
       if (simulate) gameManager.updateGameplay(dt, player, board, (m) => ui.toast(m), rlPlayback.isActive, { sim: clock, crates: board.physicsVisuals });
-      board.tick(t, { sim: clock, powered: gameManager.leverActivated, channelsOn: gameManager.channelsOn, doorsOpen: gameManager.doorsOpen, frozen });
+      board.tick(t, { sim: clock, powered: gameManager.leverActivated, channelsOn: gameManager.channelsOn, doorsOpen: gameManager.doorsOpen, frozen, player: { x: player.x, z: player.z, feet: player.jumpY, speed: Math.hypot(player.vx || 0, player.vz || 0) } });
     } else {
-      board.tick(t, { sim: gameClock, powered: gameManager.leverActivated, channelsOn: gameManager.channelsOn, doorsOpen: gameManager.doorsOpen, frozen: false });
+      board.tick(t, { sim: gameClock, powered: gameManager.leverActivated, channelsOn: gameManager.channelsOn, doorsOpen: gameManager.doorsOpen, frozen: false, player: null });
       physicsManager.syncVisuals(board.exitDoorGroup);
     }
 
@@ -290,15 +312,25 @@ export async function bootstrap() {
     const input = physicsManager.input;
     let yaw;
     if (player.yawOverride !== undefined) yaw = player.yawOverride;
+    else if (player.onIce && Math.hypot(input.dx, input.dz) > 0.1 && live) yaw = Math.atan2(input.dx, input.dz);   // on ice she faces where she steers, the slide carries her
     else if (speed > 0.6 && live) yaw = Math.atan2(player.vx, player.vz);
     else if (Math.hypot(input.dx, input.dz) > 0.1 && live) yaw = Math.atan2(input.dx, input.dz);
     const dead = gameManager.dying;
     if (!dead) {
+      const facing = playerMesh.rotation.y;
+      const slip = ((player.vx || 0) * Math.cos(facing) - (player.vz || 0) * Math.sin(facing)) / RUN_SPEED;   // sideways drift relative to where she faces
       playerMesh.userData.update(dt, {
         speed01: Math.min(1, speed / RUN_SPEED), grounded: player.grounded, vy: player.vy || 0, onIce: player.onIce,
+        pushing: Math.hypot(input.dx, input.dz) > 0.1, skid: player.skid || 0, slip,
         won: gameManager.won && !rlPlayback.isActive, yaw,
       });
+      // a little spray of ice crystals while she skates
+      if (live && simulate && player.onIce && player.grounded && speed > 2.2) {
+        iceSprayClock += dt;
+        if (iceSprayClock > 0.07) { iceSprayClock = 0; effects.dust({ x: player.x, y: 0.02, z: player.z }, 2, '#e8fbff'); }
+      }
     }
+    deaths.update(dt);
     playerMesh.visible = !dead && cameraController.view !== 'first';
 
     // Sounds that follow the player
