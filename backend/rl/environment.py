@@ -128,6 +128,12 @@ def _build_offsets():
 
 _DX, _DZ = _build_offsets()
 _SCALAR_START = LOCAL_VIEW_SIZE
+_FOOTPRINT_CACHE: Dict[str, Dict[str, Set[Any]]] = {}
+# Inverse of the window tables: for each heading, (dx, dz) offset from the player -> flat index in the 9x9 view.
+_OFFSET_INDEX = [
+    {(int(_DX[h].flat[n]), int(_DZ[h].flat[n])): n for n in range(LOCAL_VIEW_WIDTH * LOCAL_VIEW_WIDTH)}
+    for h in range(4)
+]
 
 
 class WorldEnvironment:
@@ -291,6 +297,7 @@ class WorldEnvironment:
         self.plates = [[int(c[0]), int(c[1])] for c in level.get("plates", [])[:MAX_TRACKED]]
         self.continuous_plates = {(int(c[0]), int(c[1])) for c in level.get("continuousPlates", [])}
         self.plate_mask = 0
+        self._plate_paid: Set[int] = set()
         self.coins = [[int(c[0]), int(c[1])] for c in level.get("coins", [])[:MAX_TRACKED]]
         self.coin_mask = 0
         self.switches = [[int(c[0]), int(c[1])] for c in level.get("switches", [])]
@@ -660,11 +667,44 @@ class WorldEnvironment:
         for cell, top in self.static_height.items():
             mark(CH_HEIGHT, [cell], min(1.0, top / MAX_HEIGHT))
         # Rails: every cell a dynamic hazard can ever cover (a faint hint of where to look; value = type).
+        footprints = self._hazard_footprints()
         for kind, value in (("laser", 0.4), ("shock", 0.6), ("cutter", 0.8), ("spikes", 1.0)):
-            mark(CH_RAIL, self._hazard_footprint(kind), value)
+            mark(CH_RAIL, footprints.get(kind, ()), value)
         st[CH_HEIGHT_NEXT] = st[CH_HEIGHT]
         self._static = st
         self._sync_dynamic()
+
+    def _hazard_footprints(self) -> Dict[str, Set[Cell]]:
+        """All four footprints in one sampling pass, memoised per level (shared by every environment instance:
+        the parallel training environments load the same few levels thousands of times)."""
+        if not (self.lasers or self.shocks or self.cutters or self.spikes):
+            return {}
+        sig = repr((self.lasers, self.shocks, self.cutters, self.spikes, self.laser_ch, self.shock_ch, self.cutter_ch, self.spike_ch))
+        cached = _FOOTPRINT_CACHE.get(sig)
+        if cached is not None:
+            return cached
+        out: Dict[str, Set[Cell]] = {"laser": set(), "cutter": set(), "spikes": set(), "shock": set()}
+        saved_cache = self._hazard_cache
+        self._hazard_cache = {}
+        t = 0.0
+        while t <= 24.0:
+            for cell, kinds in self.hazard_cells(t).items():
+                for kind in kinds:
+                    if kind in out and kind != "shock":
+                        out[kind].add(cell)
+            t += 0.2
+        for (x, z, d, length, _p, _y) in self.shocks:
+            n = max(0, int(round(length)))
+            if d in ("down", "up"):
+                out["shock"].add((x, z))
+            else:
+                dx, dz = {"xp": (1, 0), "xn": (-1, 0), "zp": (0, 1), "zn": (0, -1)}[d]
+                out["shock"].update((x + dx * k, z + dz * k) for k in range(n + 1))
+        self._hazard_cache = saved_cache
+        if len(_FOOTPRINT_CACHE) > 128:
+            _FOOTPRINT_CACHE.clear()
+        _FOOTPRINT_CACHE[sig] = out
+        return out
 
     def _hazard_footprint(self, kind: str) -> Set[Cell]:
         """Union of cells a hazard kind can ever occupy (sampled over one full period)."""
@@ -738,7 +778,9 @@ class WorldEnvironment:
         if x < 0 or z < 0 or x >= self.size_x or z >= self.size_z:
             return False
         c = (x, z)
-        if c in self.walls or c in self.blocks or c in self.hazards or c in self.movers or c in self.rotators:
+        # Crates are *pushable*, so the compass is allowed to lead through them (see the extra cost in _field): the
+        # agent then walks into the crate and shoves it ahead of itself, e.g. along a corridor onto a hold-button.
+        if c in self.walls or c in self.hazards or c in self.movers or c in self.rotators:
             return False
         if c == self._exit_door_key and not self.doors_open:
             return False
@@ -775,7 +817,7 @@ class WorldEnvironment:
                 if standable(nx, nz):
                     kind = self._climb_kind(height((nx, nz)), hx)
                     if kind != 2:
-                        cost = d + (1.0 if kind == 0 else CLIMB_COST)
+                        cost = d + (1.0 if kind == 0 else CLIMB_COST) + (1.0 if (nx, nz) in self.blocks else 0.0)
                         if cost < dist[nx * sz + nz]:
                             dist[nx * sz + nz] = cost
                             heapq.heappush(heap, (cost, nx, nz))
@@ -878,7 +920,7 @@ class WorldEnvironment:
                 return self.rotator_cells[index]
         return None
 
-    def _danger_layers(self, wx: np.ndarray, wz: np.ndarray) -> np.ndarray:
+    def _danger_layers(self, wx: np.ndarray, wz: np.ndarray, heading: Optional[int] = None) -> np.ndarray:
         """Bool (H, W, W): cell is swept by a bar during action k (k = 0 is the action about to be taken)."""
         horizon = DANGER_HORIZON
         out = np.zeros((horizon, LOCAL_VIEW_WIDTH, LOCAL_VIEW_WIDTH), dtype=np.float32)
@@ -898,13 +940,16 @@ class WorldEnvironment:
                 out[k] = np.maximum(out[k], danger.astype(np.float32))
         if not (self.powerup_type == "freeze" and self.powerup_until > self.sim_time_seconds):
             if self.lasers or self.shocks or self.cutters or self.spikes:
-                window = list(zip(wx.reshape(-1).tolist(), wz.reshape(-1).tolist()))
+                # Walk the (few) lethal cells of each time slice instead of testing all 81 window cells: ~10x faster.
+                px, pz = self.position
+                inverse = _OFFSET_INDEX[self.heading if heading is None else heading]
                 for k in range(horizon):
                     flat = out[k].reshape(-1)
                     for tt in times[2 * k:2 * k + 3]:
                         t = float(tt)
-                        for n, cell in enumerate(window):
-                            if flat[n] < 1.0 and self.dynamic_hit(cell, t) is not None:
+                        for cell in self.hazard_cells(t):
+                            n = inverse.get((cell[0] - px, cell[1] - pz))
+                            if n is not None and flat[n] < 1.0 and self.dynamic_hit(cell, t) is not None:
                                 flat[n] = 1.0
         return out
 
@@ -924,7 +969,7 @@ class WorldEnvironment:
         wz = z + _DZ[h]
         view = obs[:LOCAL_VIEW_SIZE].reshape(LOCAL_VIEW_CHANNELS, width, width)
         view[:STATIC_CHANNELS] = self._static[:, wx + PAD, wz + PAD]
-        view[STATIC_CHANNELS:] = self._danger_layers(wx, wz)
+        view[STATIC_CHANNELS:] = self._danger_layers(wx, wz, h)
 
         fx, fz = _DIRS[h]
         lx, lz = -fz, fx
@@ -1263,8 +1308,10 @@ class WorldEnvironment:
             if held != was_held:
                 if held:
                     self.plate_mask |= 1 << i
-                    self.total_plates += 1
-                    reward += rw["plate"]
+                    if i not in self._plate_paid:       # paid once: stepping on and off a hold-button must not farm reward
+                        self._plate_paid.add(i)
+                        self.total_plates += 1
+                        reward += rw["plate"]
                 else:
                     self.plate_mask &= ~(1 << i)
                 objective_changed = True

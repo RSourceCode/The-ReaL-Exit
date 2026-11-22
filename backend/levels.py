@@ -20,9 +20,10 @@ door is in the far wall at ``[6, 12]``.  Interactive piece formats:
 * ``blocks``          – pushable crates; ``continuousPlates`` are hold-plates that need a player or a crate.
 """
 
+import copy
 from typing import Any, Dict, List, Optional
 
-from backend.levels_long import LONG_SPECS
+from backend.levels_curriculum import CURRICULUM_SPECS
 
 GRID_SIZE = 17
 EXIT_DOOR = [GRID_SIZE // 2, GRID_SIZE - 1]
@@ -197,7 +198,9 @@ LIST_FIELDS = (
     "continuousPlates", "lifts",
 )
 
-CAMPAIGN_SPECS: List[Dict[str, Any]] = [_enlarge(spec) for spec in _SMALL_SPECS]
+# The original six hand-built rooms (kept for the regression tests and as examples); the campaign proper is the
+# curriculum in levels_curriculum.py.
+LEGACY_SPECS: List[Dict[str, Any]] = [_enlarge(spec) for spec in _SMALL_SPECS]
 
 
 def _wire(spec: Dict[str, Any], source_list: str, source_cell, targets) -> None:
@@ -211,16 +214,16 @@ def _wire(spec: Dict[str, Any], source_list: str, source_cell, targets) -> None:
 
 
 # Laser Lane: a gold button in the far corner switches the door-side laser off.
-CAMPAIGN_SPECS[2].setdefault("plates", []).append([13, 8])
-CAMPAIGN_SPECS[2]["hint"] += " The gold button in the far corner switches the door-side laser off."
-_wire(CAMPAIGN_SPECS[2], "plates", [13, 8], [("lasers", [8, 14])])
+LEGACY_SPECS[2].setdefault("plates", []).append([13, 8])
+LEGACY_SPECS[2]["hint"] += " The gold button in the far corner switches the door-side laser off."
+_wire(LEGACY_SPECS[2], "plates", [13, 8], [("lasers", [8, 14])])
 # The Real Exit: a pink lever tucked beside the coins powers down the three door shocks.
-CAMPAIGN_SPECS[5].setdefault("levers", []).append([4, 14])
-CAMPAIGN_SPECS[5]["hint"] += " The pink lever (E) powers down the shocks."
-_wire(CAMPAIGN_SPECS[5], "levers", [4, 14], [("shocks", [7, 15]), ("shocks", [8, 15]), ("shocks", [9, 15])])
+LEGACY_SPECS[5].setdefault("levers", []).append([4, 14])
+LEGACY_SPECS[5]["hint"] += " The pink lever (E) powers down the shocks."
+_wire(LEGACY_SPECS[5], "levers", [4, 14], [("shocks", [7, 15]), ("shocks", [8, 15]), ("shocks", [9, 15])])
 
-# Levels 7+: long, winding rooms (see levels_long.py)
-CAMPAIGN_SPECS.extend(LONG_SPECS)
+# The campaign: an 11-level curriculum, one new element per level (see levels_curriculum.py).
+CAMPAIGN_SPECS: List[Dict[str, Any]] = CURRICULUM_SPECS
 
 # Fields whose cells can be stretched with ``objectProperties[kind:x:z] = {"w": n, "d": m}``.
 RESIZABLE = (("walls", "wall"), ("platforms", "platform"), ("hazards", "hazard"), ("ice", "ice"), ("water", "water"))
@@ -281,9 +284,10 @@ def expand_level(level: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def make_level(index: int = 0) -> Dict[str, Any]:
+def make_level(index: int = 0, specs: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Build campaign level ``index`` (or a moderately interesting generic level beyond the campaign)."""
-    spec = CAMPAIGN_SPECS[index] if 0 <= index < len(CAMPAIGN_SPECS) else {}
+    specs = CAMPAIGN_SPECS if specs is None else specs
+    spec = specs[index] if 0 <= index < len(specs) else {}
     width = int(spec.get("width", GRID_SIZE))
     depth = int(spec.get("depth", GRID_SIZE))
     door = list(spec.get("exitDoor", [width // 2, depth - 1]))
@@ -321,6 +325,45 @@ def make_level(index: int = 0) -> Dict[str, Any]:
     return base
 
 
+_CELL_LISTS = tuple(f for f in LIST_FIELDS if f != "walls") + ("walls",)
+
+
+def mirror_level(level: Dict[str, Any]) -> Dict[str, Any]:
+    """Left-right mirror image of a level (x -> width - 1 - x).
+
+    Used by the trainer as cheap data augmentation: the agent sees every room both ways round, so it learns
+    "go round the wall", "jump the acid", ... rather than memorising which side things are on.  Everything that has a
+    side is flipped consistently (cells, laser / cutter rails, shock directions, wiring keys, start and door).
+    """
+    level = migrate_level(copy.deepcopy(level))
+    width = int(level["width"])
+    flip = lambda x: width - 1 - int(x)  # noqa: E731
+    out = dict(level)
+    for field in _CELL_LISTS:
+        out[field] = [[flip(c[0]), *c[1:]] for c in level.get(field, [])]
+    out["shocks"] = [[flip(c[0]), c[1], {"xp": "xn", "xn": "xp"}.get(c[2], c[2]), *c[3:]] if len(c) > 2 else [flip(c[0]), *c[1:]]
+                     for c in level.get("shocks", [])]
+    out["start"] = [flip(level["start"][0]), level["start"][1]]
+    out["exitDoor"] = [flip(level["exitDoor"][0]), level["exitDoor"][1]]
+    out["goal"] = list(out["exitDoor"])
+    props = {}
+    for key, value in (level.get("objectProperties") or {}).items():
+        parts = key.split(":")
+        if len(parts) == 3 and parts[1].lstrip("-").isdigit():
+            parts[1] = str(flip(parts[1]))
+        props[":".join(parts)] = copy.deepcopy(value)
+    out["objectProperties"] = props
+    out["name"] = f"{level.get('name', 'Level')} (mirrored)"
+    return out
+
+
 def starter_campaign(count: Optional[int] = None) -> List[Dict[str, Any]]:
+    """The curriculum campaign (first ``count`` levels)."""
     count = len(CAMPAIGN_SPECS) if count is None else count
-    return [make_level(i) for i in range(count)]
+    return [make_level(i) for i in range(min(count, len(CAMPAIGN_SPECS)))]
+
+
+def legacy_campaign(count: Optional[int] = None) -> List[Dict[str, Any]]:
+    """The original six 17 x 17 rooms (regression tests / examples)."""
+    count = len(LEGACY_SPECS) if count is None else count
+    return [make_level(i, LEGACY_SPECS) for i in range(min(count, len(LEGACY_SPECS)))]

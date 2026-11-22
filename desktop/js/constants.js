@@ -8,6 +8,7 @@
 
 export const GRID_SIZE = 17;               // default room size (levels may be any width x depth, see worldDims)
 export const HALF_GRID = (GRID_SIZE - 1) / 2;
+export const CAMPAIGN_VERSION = 3;     // bump when the built-in campaign changes
 export const MIN_GRID = 9;
 export const MAX_GRID = 41;
 export const EXIT_OPENING_WIDTH = 1.5;     // legacy
@@ -276,236 +277,162 @@ export function boundaryWalls(exitDoor, w = GRID_SIZE, d = GRID_SIZE) {
 // <generated:levels>
 export const CAMPAIGN_SPECS = [
   {
-    "name": "Intake Bay",
-    "hint": "Jump (Space) onto the low wall and stand on the button, then slip past the spinner. Mind the spikes.",
-    "walls": [[3, 12], [4, 12], [5, 12], [6, 12], [10, 12], [11, 12], [12, 12], [13, 12], [1, 12], [2, 12], [14, 12], [15, 12], [1, 4], [2, 4], [3, 4], [4, 4], [5, 4], [6, 4], [7, 4], [8, 4], [9, 4], [10, 4], [11, 4], [12, 4]],
-    "platforms": [[7, 9], [8, 9], [9, 9]],
-    "plates": [[8, 9]],
-    "spikes": [[5, 14, 0], [11, 14, 0]],
-    "water": [[4, 9], [5, 9], [4, 10], [5, 10], [11, 9], [12, 9], [11, 10], [12, 10]],
-    "coins": [[5, 7], [11, 7], [9, 9], [8, 14]],
-    "rotators": [[8, 12]],
-    "rotatorSpeed": 0.9
+    "name": "First Steps",
+    "hint": "Walk to the glowing door and step through it. Pick up the coins on the way.",
+    "width": 9,
+    "depth": 9,
+    "start": [2, 1],
+    "exitDoor": [6, 8],
+    "coins": [[5, 6], [4, 5], [3, 3]],
+    "timeLimit": 25,
+    "rotatorSpeed": 1.0
   },
   {
-    "name": "Cargo Bay",
-    "hint": "Push the crate onto the glowing hold-button. Then cross the shock gate while the bolts are charging.",
-    "walls": [[10, 9], [10, 10], [10, 11], [12, 9], [12, 10], [12, 11], [3, 14], [4, 14], [5, 14], [6, 14], [10, 14], [11, 14], [12, 14], [13, 14], [1, 14], [2, 14], [14, 14], [15, 14], [1, 4], [2, 4], [3, 4], [4, 4], [5, 4], [6, 4], [7, 4], [8, 4], [9, 4], [10, 4], [11, 4], [12, 4]],
-    "blocks": [[11, 8]],
-    "plates": [[11, 11]],
-    "continuousPlates": [[11, 11]],
-    "platforms": [[5, 10]],
-    "coins": [[4, 7], [12, 7], [7, 10], [5, 10], [4, 13]],
-    "shocks": [[7, 14, "down", 3, 3.0, 3.0], [8, 14, "down", 3, 3.0, 3.0], [9, 14, "down", 3, 3.0, 3.0]],
-    "rotators": [],
+    "name": "Press the Button",
+    "hint": "The door is locked. Go round the wall, step on the button, then head for the door.",
+    "width": 11,
+    "depth": 11,
+    "start": [5, 1],
+    "exitDoor": [5, 10],
+    "plates": [[2, 8]],
+    "coins": [[4, 8], [9, 6], [8, 3]],
+    "walls": [[1, 5], [2, 5], [3, 5], [4, 5], [5, 5], [6, 5], [7, 5]],
+    "timeLimit": 35,
+    "rotatorSpeed": 1.0
+  },
+  {
+    "name": "Ice & Pond",
+    "hint": "Water only slows you down and ice makes you slide \u2013 neither is dangerous. Reach the door.",
+    "width": 11,
+    "depth": 13,
+    "start": [5, 1],
+    "exitDoor": [5, 12],
+    "coins": [[5, 10], [2, 8], [8, 8], [5, 5]],
+    "ice": [[1, 9], [2, 9], [3, 9], [4, 9], [5, 9], [6, 9], [7, 9], [8, 9], [9, 9], [1, 8], [3, 8], [4, 8], [5, 8], [6, 8], [7, 8], [9, 8], [1, 7], [2, 7], [3, 7], [4, 7], [5, 7], [6, 7], [7, 7], [8, 7], [9, 7]],
+    "water": [[3, 4], [4, 4], [5, 4], [6, 4], [7, 4], [3, 3], [4, 3], [5, 3], [6, 3], [7, 3]],
+    "timeLimit": 35,
+    "rotatorSpeed": 1.0
+  },
+  {
+    "name": "Acid Hop",
+    "hint": "Acid is deadly. It is one tile wide \u2013 face it and jump (Space) to land on the far side.",
+    "width": 11,
+    "depth": 13,
+    "start": [5, 1],
+    "exitDoor": [5, 12],
+    "coins": [[3, 10], [5, 9], [5, 3]],
+    "hazards": [[1, 6], [2, 6], [3, 6], [4, 6], [5, 6], [6, 6], [7, 6], [8, 6], [9, 6]],
+    "timeLimit": 35,
+    "rotatorSpeed": 1.0
+  },
+  {
+    "name": "Spike Row",
+    "hint": "Spikes pop out of the floor in turns. Wait for a gap \u2013 or jump over them.",
+    "width": 11,
+    "depth": 13,
+    "start": [5, 1],
+    "exitDoor": [5, 12],
+    "coins": [[7, 10], [5, 9], [5, 3]],
+    "spikes": [[1, 6, 3.0], [2, 6, 3.0], [3, 6, 3.0], [4, 6, 3.0], [5, 6, 3.0], [6, 6, 3.0], [7, 6, 3.0], [8, 6, 3.0], [9, 6, 3.0]],
+    "timeLimit": 40,
     "rotatorSpeed": 1.0
   },
   {
     "name": "Laser Lane",
-    "hint": "Lasers sweep along any axis. Time your dash, jump the low beam, or wait on a ledge. The gold button in the far corner switches the door-side laser off.",
-    "walls": [[1, 4], [2, 4], [3, 4], [4, 4], [5, 4], [6, 4], [7, 4], [8, 4], [9, 4], [10, 4], [11, 4], [12, 4]],
-    "lasers": [[8, 10, "z", 1, 7.0, "x", 0.5, 1.0], [8, 14, "y", 0.9, 7.0, "x", 1.0, 1.0]],
-    "platforms": [[5, 14], [11, 10]],
-    "plates": [[8, 12], [13, 8]],
-    "coins": [[5, 7], [11, 7], [4, 12], [12, 12], [5, 14], [11, 10]],
-    "rotators": [],
-    "rotatorSpeed": 1.0,
-    "objectProperties": {
-      "plate:13:8": {
-        "channel": 1
-      },
-      "laser:8:14": {
-        "channel": 1
-      }
-    }
+    "hint": "A laser sweeps back and forth across the room. Cross when it is far away, or jump over the beam.",
+    "width": 11,
+    "depth": 13,
+    "start": [5, 1],
+    "exitDoor": [5, 12],
+    "coins": [[5, 11], [7, 10], [3, 3]],
+    "lasers": [[5, 6, "z", 1.5, 5, "x", 0.5, 0.9]],
+    "timeLimit": 40,
+    "rotatorSpeed": 1.0
   },
   {
-    "name": "Acid Bridge",
-    "hint": "Hop onto the low-wall bridge to cross the acid. One of the two buttons sits on a ledge island; a cutter patrols the exit.",
-    "walls": [[1, 4], [2, 4], [3, 4], [4, 4], [5, 4], [6, 4], [7, 4], [8, 4], [9, 4], [10, 4], [11, 4], [12, 4]],
-    "hazards": [[3, 10], [4, 10], [5, 10], [6, 10], [7, 10], [9, 10], [10, 10], [11, 10], [12, 10], [13, 10], [3, 11], [4, 11], [5, 11], [6, 11], [7, 11], [9, 11], [10, 11], [11, 11], [12, 11], [13, 11], [1, 10], [2, 10], [14, 10], [15, 10], [1, 11], [2, 11], [14, 11], [15, 11]],
-    "platforms": [[8, 10], [8, 11], [12, 13], [12, 14], [11, 14]],
-    "plates": [[8, 8], [12, 14]],
-    "cutters": [[8, 14, "x", 5.0, 0.5, 1.0]],
-    "coins": [[4, 7], [12, 7], [8, 11], [11, 14], [5, 13]],
-    "rotators": [],
+    "name": "Shock Gate",
+    "hint": "Each shock charges (yellow) then strikes. Slip through the doorway while the one in your way is idle.",
+    "width": 11,
+    "depth": 13,
+    "start": [5, 1],
+    "exitDoor": [5, 12],
+    "coins": [[3, 10], [5, 9], [5, 3]],
+    "walls": [[1, 6], [2, 6], [3, 6], [7, 6], [8, 6], [9, 6]],
+    "shocks": [[4, 6, "down", 3, 3.0, 3.0], [5, 6, "down", 3, 3.0, 3.0], [6, 6, "down", 3, 3.0, 3.0]],
+    "timeLimit": 40,
+    "rotatorSpeed": 1.0
+  },
+  {
+    "name": "Saw & Spinner",
+    "hint": "Time your run past the patrolling saw, then slip by the spinning bar before the door.",
+    "width": 13,
+    "depth": 13,
+    "start": [6, 1],
+    "exitDoor": [6, 12],
+    "rotators": [[6, 9]],
+    "coins": [[3, 8], [9, 8], [6, 3]],
+    "walls": [[1, 5], [2, 5], [3, 5], [4, 5], [8, 5], [9, 5], [10, 5], [11, 5]],
+    "cutters": [[6, 5, "x", 1.0, 0.5, 1.2]],
+    "rotatorSpeed": 1.0,
+    "timeLimit": 45
+  },
+  {
+    "name": "Crate Switch",
+    "hint": "The hold-button only stays pressed while something sits on it. Push the crate along the corridor onto it.",
+    "width": 13,
+    "depth": 13,
+    "start": [6, 1],
+    "exitDoor": [6, 12],
+    "coins": [[9, 9], [6, 7], [9, 3]],
+    "walls": [[1, 4], [2, 4], [3, 4], [4, 4], [5, 4], [6, 4], [1, 3], [1, 2], [2, 2], [3, 2], [4, 2], [5, 2]],
+    "plates": [[2, 3]],
+    "continuousPlates": [[2, 3]],
+    "blocks": [[4, 3]],
+    "timeLimit": 45,
     "rotatorSpeed": 1.0
   },
   {
     "name": "Lift Off",
-    "hint": "Pull the power lever (E), step on the lift, and jump from it onto the tower to reach the button.",
-    "walls": [[3, 12], [4, 12], [5, 12], [6, 12], [10, 12], [11, 12], [12, 12], [13, 12], [1, 12], [2, 12], [14, 12], [15, 12], [1, 4], [2, 4], [3, 4], [4, 4], [5, 4], [6, 4], [7, 4], [8, 4], [9, 4], [10, 4], [11, 4], [12, 4]],
-    "hazards": [[7, 11], [9, 11], [7, 12], [9, 12]],
-    "levers": [[4, 6]],
-    "lifts": [[8, 11, 1.2]],
-    "platforms": [[8, 12]],
+    "hint": "Pull the lever (E) to power the lift. Ride it up, jump onto the tower and press the button on top.",
+    "width": 13,
+    "depth": 15,
+    "start": [6, 1],
+    "exitDoor": [6, 14],
+    "coins": [[3, 11], [9, 10], [9, 3]],
+    "walls": [[1, 7], [2, 7], [3, 7], [4, 7], [8, 7], [9, 7], [10, 7], [11, 7]],
+    "hazards": [[5, 7], [7, 7], [5, 6], [7, 6]],
+    "platforms": [[6, 7]],
+    "plates": [[6, 7]],
+    "lifts": [[6, 6, 1.2]],
+    "levers": [[3, 3]],
     "objectProperties": {
-      "platform:8:12": {
+      "platform:6:7": {
         "height": 2.0,
         "size": 0.95,
         "color": "#7fb6ff",
         "collision": true
       }
     },
-    "plates": [[8, 12]],
-    "coins": [[5, 8], [11, 8], [8, 9], [4, 10], [12, 10], [8, 15]],
-    "rotators": [[8, 14]],
-    "rotatorSpeed": 1.3,
-    "timeLimit": 69
-  },
-  {
-    "name": "The Real Exit",
-    "hint": "Slide across the ice, hop onto the ledge for the button, then beat the laser, the cutter and the shock gate. Good luck, Deeba! The pink lever (E) powers down the shocks.",
-    "walls": [[9, 9], [9, 10], [9, 11], [1, 4], [2, 4], [3, 4], [4, 4], [5, 4], [6, 4], [7, 4], [8, 4], [9, 4], [10, 4], [11, 4], [12, 4]],
-    "plates": [[11, 11]],
-    "platforms": [[11, 11], [12, 11]],
-    "hazards": [[10, 9], [10, 10], [10, 11]],
-    "ice": [[6, 8], [7, 8], [8, 8], [9, 8]],
-    "lasers": [[8, 10, "z", 1, 7.0, "x", 0.5, 1.0]],
-    "cutters": [[8, 13, "x", 5.0, 0.5, 1.0]],
-    "shocks": [[7, 15, "down", 3, 3.0, 3.0], [8, 15, "down", 3, 3.0, 3.0], [9, 15, "down", 3, 3.0, 3.0]],
-    "coins": [[4, 7], [4, 13], [12, 8], [11, 11], [8, 13]],
-    "powerups": [[8, 8, "jump"]],
-    "timeLimit": 89,
-    "levers": [[4, 14]],
-    "objectProperties": {
-      "lever:4:14": {
-        "channel": 1
-      },
-      "shock:7:15": {
-        "channel": 1
-      },
-      "shock:8:15": {
-        "channel": 1
-      },
-      "shock:9:15": {
-        "channel": 1
-      }
-    }
-  },
-  {
-    "name": "Switchback",
-    "hint": "A long winding corridor: hop the spikes, wade the pond, slide the ice, dodge the laser, grab the button and beat the shock gate.",
-    "width": 15,
-    "depth": 21,
-    "start": [2, 2],
-    "exitDoor": [14, 18],
-    "coins": [[4, 19], [12, 19], [3, 14], [10, 13], [12, 11], [7, 10], [3, 7], [11, 6], [9, 3], [12, 2], [3, 1]],
-    "walls": [[3, 16], [4, 16], [5, 16], [6, 16], [7, 16], [8, 16], [9, 16], [10, 16], [11, 16], [12, 16], [13, 16], [1, 12], [2, 12], [3, 12], [4, 12], [5, 12], [6, 12], [7, 12], [8, 12], [9, 12], [10, 12], [11, 12], [3, 8], [4, 8], [5, 8], [6, 8], [7, 8], [8, 8], [9, 8], [10, 8], [11, 8], [12, 8], [13, 8], [1, 4], [2, 4], [3, 4], [4, 4], [5, 4], [6, 4], [7, 4], [8, 4], [9, 4], [10, 4], [11, 4]],
-    "plates": [[2, 15]],
-    "ice": [[4, 11], [5, 11], [6, 11], [7, 11], [8, 11], [9, 11], [4, 10], [5, 10], [6, 10], [8, 10], [9, 10], [4, 9], [5, 9], [6, 9], [7, 9], [8, 9], [9, 9]],
-    "hazards": [[11, 11], [11, 10], [11, 9]],
-    "water": [[8, 7], [9, 7], [8, 6], [9, 6], [8, 5], [9, 5]],
-    "spikes": [[6, 3, 3.0], [6, 2, 3.0], [6, 1, 3.0]],
-    "cutters": [[4, 6, "z", 1.0, 0.5, 1.0]],
-    "lasers": [[7, 14, "x", 2.5, 1, "z", 0.5, 0.9]],
-    "shocks": [[8, 17, "down", 3, 3.0, 3.0], [8, 18, "down", 3, 3.0, 3.0], [8, 19, "down", 3, 3.0, 3.0]],
-    "timeLimit": 120,
+    "timeLimit": 60,
     "rotatorSpeed": 1.0
   },
   {
-    "name": "Crate Canyon",
-    "hint": "Push the crate onto the gold button to power down the shock gate. Bridge the acid, pull the lever, ride the lift to the tower button, and slip past the spinner.",
-    "width": 17,
-    "depth": 27,
-    "start": [2, 3],
-    "exitDoor": [8, 26],
-    "coins": [[3, 24], [13, 24], [5, 20], [13, 17], [8, 15], [3, 13], [11, 9], [2, 7], [13, 5], [6, 1]],
-    "rotators": [[8, 24]],
-    "walls": [[1, 22], [2, 22], [3, 22], [4, 22], [5, 22], [6, 22], [10, 22], [11, 22], [12, 22], [13, 22], [14, 22], [15, 22], [1, 18], [2, 18], [3, 18], [4, 18], [5, 18], [6, 18], [7, 18], [8, 18], [9, 18], [10, 18], [11, 18], [12, 18], [4, 12], [5, 12], [6, 12], [7, 12], [8, 12], [9, 12], [10, 12], [11, 12], [12, 12], [13, 12], [14, 12], [15, 12], [8, 11], [8, 7], [1, 6], [2, 6], [3, 6], [4, 6], [5, 6], [6, 6], [7, 6], [8, 6], [9, 6], [10, 6], [11, 6], [12, 6]],
-    "hazards": [[7, 22], [9, 22], [7, 21], [9, 21], [7, 17], [8, 17], [9, 17], [7, 16], [8, 16], [9, 16], [7, 14], [8, 14], [9, 14], [7, 13], [8, 13], [9, 13]],
-    "platforms": [[8, 22], [7, 15], [8, 15], [9, 15]],
-    "plates": [[8, 22], [11, 3]],
-    "lifts": [[8, 21, 1.2]],
-    "levers": [[13, 20]],
-    "water": [[3, 10], [4, 10], [5, 10], [3, 9], [4, 9], [5, 9], [3, 8], [4, 8], [5, 8]],
-    "blocks": [[4, 3]],
-    "continuousPlates": [[11, 3]],
-    "shocks": [[8, 8, "down", 3, 3.0, 3.0], [8, 9, "down", 3, 3.0, 3.0], [8, 10, "down", 3, 3.0, 3.0]],
-    "cutters": [[13, 15, "z", 1.5, 0.5, 1.0]],
-    "objectProperties": {
-      "platform:8:22": {
-        "height": 2.0,
-        "size": 0.95,
-        "color": "#7fb6ff",
-        "collision": true
-      },
-      "plate:11:3": {
-        "channel": 1
-      },
-      "shock:8:8": {
-        "channel": 1
-      },
-      "shock:8:9": {
-        "channel": 1
-      },
-      "shock:8:10": {
-        "channel": 1
-      }
-    },
-    "rotatorSpeed": 1.1,
-    "timeLimit": 150
-  },
-  {
-    "name": "Frozen Gallery",
-    "hint": "Slide across the ice, jump the sweeping laser (or grab the shield first), time the spikes and the saw, press the button and finish past the shocks and spinner.",
-    "width": 21,
+    "name": "Grand Exit",
+    "hint": "Everything so far in one winding room: slide the ice, hop the acid, press the button, time the laser and the shocks.",
+    "width": 15,
     "depth": 19,
-    "start": [2, 3],
-    "exitDoor": [20, 15],
-    "coins": [[6, 17], [6, 15], [2, 9], [12, 7], [8, 4], [14, 3], [8, 2]],
-    "walls": [[10, 17], [10, 13], [4, 12], [5, 12], [6, 12], [7, 12], [8, 12], [9, 12], [10, 12], [11, 12], [12, 12], [13, 12], [14, 12], [15, 12], [16, 12], [17, 12], [18, 12], [19, 12], [1, 6], [2, 6], [3, 6], [4, 6], [5, 6], [6, 6], [7, 6], [8, 6], [9, 6], [10, 6], [11, 6], [12, 6], [13, 6], [14, 6], [15, 6], [16, 6]],
-    "water": [[14, 17], [15, 17], [14, 16], [15, 16], [14, 15], [15, 15], [14, 14], [15, 14], [14, 13], [15, 13]],
-    "rotators": [[17, 15]],
-    "plates": [[3, 10]],
-    "spikes": [[6, 10, 3.0], [6, 8, 3.0]],
-    "powerups": [[2, 5, "shield"]],
-    "ice": [[3, 5], [4, 5], [5, 5], [6, 5], [7, 5], [8, 5], [9, 5], [10, 5], [11, 5], [12, 5], [13, 5], [14, 5], [15, 5], [16, 5], [17, 5], [3, 4], [4, 4], [5, 4], [6, 4], [7, 4], [9, 4], [10, 4], [11, 4], [12, 4], [13, 4], [14, 4], [15, 4], [16, 4], [17, 4], [3, 3], [4, 3], [5, 3], [6, 3], [7, 3], [8, 3], [9, 3], [10, 3], [11, 3], [12, 3], [13, 3], [15, 3], [16, 3], [17, 3], [3, 2], [4, 2], [5, 2], [6, 2], [7, 2], [9, 2], [10, 2], [11, 2], [12, 2], [13, 2], [14, 2], [15, 2], [16, 2], [17, 2], [3, 1], [4, 1], [5, 1], [6, 1], [7, 1], [8, 1], [9, 1], [10, 1], [11, 1], [12, 1], [13, 1], [14, 1], [15, 1], [16, 1], [17, 1]],
-    "lasers": [[10, 3, "x", 4.0, 2, "z", 0.5, 0.7]],
-    "cutters": [[10, 9, "z", 2.0, 0.5, 1.2]],
-    "shocks": [[10, 14, "down", 3, 3.0, 3.0], [10, 15, "down", 3, 3.0, 3.0], [10, 16, "down", 3, 3.0, 3.0]],
-    "rotatorSpeed": 1.0,
-    "timeLimit": 110
-  },
-  {
-    "name": "Deeba's Grand Exit",
-    "hint": "Everything you have learned, in one long run: crate button, ice, acid bridge, laser patrol, lever and lift, and a spinner at the door.",
-    "width": 23,
-    "depth": 33,
-    "start": [2, 3],
-    "exitDoor": [11, 32],
-    "rotators": [[11, 30]],
-    "coins": [[5, 29], [17, 29], [17, 25], [19, 23], [5, 21], [3, 17], [10, 15], [19, 13], [3, 11], [16, 7], [9, 3], [13, 3], [17, 1]],
-    "walls": [[1, 27], [2, 27], [3, 27], [4, 27], [5, 27], [6, 27], [7, 27], [8, 27], [9, 27], [13, 27], [14, 27], [15, 27], [16, 27], [17, 27], [18, 27], [19, 27], [20, 27], [21, 27], [4, 24], [5, 24], [6, 24], [7, 24], [8, 24], [9, 24], [10, 24], [11, 24], [12, 24], [13, 24], [14, 24], [15, 24], [16, 24], [17, 24], [18, 24], [19, 24], [20, 24], [21, 24], [1, 18], [2, 18], [3, 18], [4, 18], [5, 18], [6, 18], [7, 18], [8, 18], [9, 18], [10, 18], [11, 18], [12, 18], [13, 18], [14, 18], [15, 18], [16, 18], [17, 18], [18, 18], [4, 12], [5, 12], [6, 12], [7, 12], [8, 12], [9, 12], [10, 12], [11, 12], [12, 12], [13, 12], [14, 12], [15, 12], [16, 12], [17, 12], [18, 12], [19, 12], [20, 12], [21, 12], [1, 6], [2, 6], [3, 6], [4, 6], [5, 6], [6, 6], [7, 6], [8, 6], [9, 6], [10, 6], [11, 6], [12, 6], [13, 6], [14, 6], [15, 6], [16, 6], [17, 6], [18, 6]],
-    "hazards": [[10, 27], [12, 27], [10, 26], [12, 26], [9, 17], [10, 17], [11, 17], [9, 16], [10, 16], [11, 16], [9, 14], [10, 14], [11, 14], [9, 13], [10, 13], [11, 13]],
-    "platforms": [[11, 27], [9, 15], [10, 15], [11, 15]],
-    "plates": [[11, 27], [7, 9]],
-    "lifts": [[11, 26, 1.2]],
-    "levers": [[4, 25]],
-    "spikes": [[14, 23, 3.0], [14, 22, 3.0], [14, 21, 3.0], [14, 20, 3.0], [14, 19, 3.0], [7, 5, 3.0], [7, 4, 3.0], [7, 3, 3.0], [7, 2, 3.0], [7, 1, 3.0]],
-    "water": [[12, 11], [13, 11], [12, 10], [13, 10], [12, 9], [13, 9], [12, 8], [13, 8], [12, 7], [13, 7]],
-    "continuousPlates": [[7, 9]],
-    "blocks": [[19, 9]],
-    "powerups": [[3, 5, "jump"]],
-    "ice": [[11, 5], [12, 5], [13, 5], [14, 5], [15, 5], [16, 5], [11, 4], [12, 4], [13, 4], [14, 4], [15, 4], [16, 4], [11, 3], [12, 3], [14, 3], [15, 3], [16, 3], [11, 2], [12, 2], [13, 2], [14, 2], [15, 2], [16, 2], [11, 1], [12, 1], [13, 1], [14, 1], [15, 1], [16, 1]],
-    "cutters": [[16, 15, "z", 1.5, 0.5, 1.0]],
-    "lasers": [[10, 21, "x", 4.0, 2, "z", 0.5, 0.9]],
-    "objectProperties": {
-      "platform:11:27": {
-        "height": 2.0,
-        "size": 0.95,
-        "color": "#7fb6ff",
-        "collision": true
-      },
-      "plate:7:9": {
-        "channel": 1
-      },
-      "laser:10:21": {
-        "channel": 1
-      }
-    },
-    "rotatorSpeed": 1.2,
-    "timeLimit": 210
+    "start": [2, 1],
+    "exitDoor": [7, 18],
+    "coins": [[7, 17], [4, 12], [11, 7], [6, 3]],
+    "walls": [[1, 15], [2, 15], [3, 15], [4, 15], [5, 15], [9, 15], [10, 15], [11, 15], [12, 15], [13, 15], [3, 10], [4, 10], [5, 10], [6, 10], [7, 10], [8, 10], [9, 10], [10, 10], [11, 10], [12, 10], [13, 10], [1, 5], [2, 5], [3, 5], [4, 5], [5, 5], [6, 5], [7, 5], [8, 5], [9, 5], [10, 5], [11, 5]],
+    "hazards": [[7, 9], [7, 8], [7, 7], [7, 6]],
+    "plates": [[2, 8]],
+    "ice": [[4, 4], [5, 4], [6, 4], [7, 4], [8, 4], [4, 3], [5, 3], [7, 3], [8, 3], [4, 2], [5, 2], [6, 2], [7, 2], [8, 2], [4, 1], [5, 1], [6, 1], [7, 1], [8, 1]],
+    "water": [[10, 3], [11, 3], [10, 2], [11, 2]],
+    "lasers": [[7, 12, "z", 1.5, 6, "x", 0.5, 0.9]],
+    "shocks": [[6, 15, "down", 3, 3.0, 3.0], [7, 15, "down", 3, 3.0, 3.0], [8, 15, "down", 3, 3.0, 3.0]],
+    "timeLimit": 90,
+    "rotatorSpeed": 1.0
   },
 ];
 // </generated:levels>
@@ -568,8 +495,12 @@ export function loadCampaign() {
           migrateLevel(level);
         }
         // Built-in rooms added in later versions appear at the end of an existing campaign.
-        const seen = Number.isFinite(saved.builtinSeen) ? saved.builtinSeen : 6;
-        CAMPAIGN_SPECS.forEach((_, i) => { if (i >= seen) saved.levels.push(makeLevel(i)); });
+        // The built-in campaign is a curriculum that changes between versions: an older save gets the new built-in
+        // levels, while the player's own levels (anything that is not a "catlab-N" built-in) are kept after them.
+        if (saved.campaignVersion !== CAMPAIGN_VERSION) {
+          const custom = saved.levels.filter((l) => !/^catlab-\d+$/.test(String(l.id || '')));
+          saved.levels = CAMPAIGN_SPECS.map((_, i) => makeLevel(i)).concat(custom);
+        }
         return saved.levels;
       }
     }

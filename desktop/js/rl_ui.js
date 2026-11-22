@@ -41,7 +41,7 @@ export class RLUIController {
           id: 'ppo',
           name: 'PPO · Actor-Critic Network',
           description: 'Neural-network PPO with GAE on the egocentric view.',
-          defaults: { learningRate: 0.001, discount: 0.99, gaeLambda: 0.95, rolloutSteps: 16, epochs: 4, miniBatchSize: 64, clipRange: 0.2, entropy: 0.02, hidden: 128, parallelInstances: 16, annealLR: 1 },
+          defaults: { learningRate: 0.001, discount: 0.99, gaeLambda: 0.95, rolloutSteps: 32, epochs: 4, miniBatchSize: 128, clipRange: 0.2, entropy: 0.02, hidden: 128, parallelInstances: 16, annealLR: 1 },
           fields: [
             { key: 'learningRate', label: 'Learning rate', min: 0.00005, max: 0.003, step: 0.00005 },
             { key: 'discount', label: 'Discount γ', min: 0.8, max: 0.999, step: 0.001 },
@@ -156,6 +156,37 @@ export class RLUIController {
     }
   }
 
+  currentOptions() {
+    return {
+      curriculum: $('rlCurriculum')?.checked ?? true,
+      augment: $('rlAugment')?.checked ?? true,
+      stopWhenMastered: $('rlEarlyStop')?.checked ?? true,
+      masteryThreshold: Number($('rlMastery')?.value) || 0.95,
+    };
+  }
+
+  /** One chip per level: locked (not yet unlocked), learning (with its recent clear rate) or mastered. */
+  renderCurriculum(stats) {
+    const host = $('rlCurriculumList');
+    if (!host) return;
+    const cur = stats?.curriculum;
+    if (!cur) { host.replaceChildren(); $('rlCurriculumNote').textContent = ''; return; }
+    const names = this.trainingLevelNames?.length === cur.count ? this.trainingLevelNames : cur.rates.map((_, i) => `Level ${i + 1}`);
+    host.replaceChildren(...cur.rates.map((rate, i) => {
+      const chip = document.createElement('div');
+      const locked = cur.enabled && i >= cur.unlocked;
+      const mastered = !locked && rate !== null && rate >= cur.threshold && cur.attempts[i] >= 20;
+      chip.className = `curriculum-chip${locked ? ' locked' : mastered ? ' mastered' : ' learning'}`;
+      const label = document.createElement('span'); label.textContent = `${i + 1}. ${names[i]}`;
+      const value = document.createElement('b'); value.textContent = locked ? 'locked' : rate === null ? '…' : `${Math.round(rate * 100)}%`;
+      const bar = document.createElement('i'); bar.style.width = `${locked || rate === null ? 0 : Math.round(rate * 100)}%`;
+      chip.append(label, value, bar);
+      return chip;
+    }));
+    const done = cur.rates.filter((r, i) => r !== null && r >= cur.threshold && cur.attempts[i] >= 20 && !(cur.enabled && i >= cur.unlocked)).length;
+    $('rlCurriculumNote').textContent = stats.mastered ? 'ALL MASTERED ✓' : `${done} / ${cur.count} MASTERED`;
+  }
+
   currentHyperparameters() {
     const algoId = $('rlAlgorithm').value;
     const algo = this.algorithms.find((a) => a.id === algoId) || this.algorithms[0];
@@ -258,6 +289,7 @@ export class RLUIController {
       $('rlProgressBar').style.width = '0%';
       $('rlProgressPercent').textContent = '0%';
       this.drawChart();
+      this.renderCurriculum(null);
       return;
     }
 
@@ -270,7 +302,7 @@ export class RLUIController {
     $('rlMeanDeaths').textContent = stats.episodes ? stats.meanDeaths.toFixed(1) : '—';
     $('rlMeanCoins').textContent = stats.episodes ? stats.coinRate.toFixed(1) : '—';
 
-    const target = Math.max(1, Number($('rlTimesteps').value) || 200000);
+    const target = Math.max(1, Number($('rlTimesteps').value) || 300000);
     const percent = Math.min(100, (stats.steps / target) * 100);
     $('rlProgressBar').style.width = `${percent}%`;
     $('rlProgressPercent').textContent = `${Math.floor(percent)}%`;
@@ -278,6 +310,7 @@ export class RLUIController {
 
     this.history = stats.history || [];
     this.drawChart();
+    this.renderCurriculum(stats);
   }
 
   setState(state, message) {
@@ -300,7 +333,10 @@ export class RLUIController {
       const res = await this.client.getTrainingStatus();
       if (res.stats) this.updateDisplay(res.stats);
       if (res.state === 'complete') {
-        this.setState('complete', `Training complete · ${res.stats?.episodes || 0} episodes`);
+        const s = res.stats;
+        this.setState('complete', s?.mastered
+          ? `Every level mastered · ${s.steps.toLocaleString()} steps · ready to watch in game`
+          : `Training complete · ${s?.episodes || 0} episodes`);
         return;
       }
       if (res.state === 'stopped') {
@@ -330,15 +366,18 @@ export class RLUIController {
         seed: checkpoint?.seed || Number($('rlSeed').value) || 17,
         maxEpisodeSteps: checkpoint?.maxEpisodeSteps || Number($('rlEpisodeLimit').value) || 300,
         rewards: this.currentRewards(),
+        options: this.currentOptions(),
         checkpoint,
       };
+      this.trainingLevelNames = (initPayload.levels || []).map((l, i) => l.name || `Level ${i + 1}`);
 
       const res = await this.client.initTraining(initPayload);
       this.loadedCheckpoint = null;
       this.rlRunId++;
       await this.client.startTraining(
-        Math.max(1000, Number($('rlTimesteps').value) || 200000),
-        Number($('rlSpeed').value) || 2048
+        Math.max(1000, Number($('rlTimesteps').value) || 300000),
+        Number($('rlSpeed').value) || 2048,
+        this.currentOptions()
       );
       this.setState('running', `Training · ${algoId.toUpperCase()} on Python Backend`);
       this.updateDisplay(res.stats);

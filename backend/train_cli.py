@@ -29,12 +29,16 @@ from backend.rl.trainer import RLTrainer  # noqa: E402
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train a The-ReaL-Exit agent headlessly.")
     parser.add_argument("--algo", default="ppo", choices=["ppo", "dqn", "random"])
-    parser.add_argument("--steps", type=int, default=300_000, help="total environment steps")
-    parser.add_argument("--levels", type=int, default=8, help="number of starter levels to use (1-8)")
+    parser.add_argument("--steps", type=int, default=400_000, help="maximum environment steps (training stops earlier once every level is mastered)")
+    parser.add_argument("--levels", type=int, default=11, help="number of campaign levels to use (1-11)")
     parser.add_argument("--levels-file", help="JSON file with a list of levels (or one level)")
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--max-episode-steps", type=int, default=300)
-    parser.add_argument("--out", default="checkpoints/the-real-exit-checkpoint.json")
+    parser.add_argument("--out", default="checkpoints/the-real-exit-curriculum-ppo.json")
+    parser.add_argument("--no-curriculum", action="store_true", help="sample every level from the start instead of unlocking them in order")
+    parser.add_argument("--no-augment", action="store_true", help="do not also train on mirrored copies of the levels")
+    parser.add_argument("--no-early-stop", action="store_true", help="keep training to --steps even after every level is mastered")
+    parser.add_argument("--mastery", type=float, default=0.95, help="clear rate every level must reach to count as mastered")
     parser.add_argument("--resume", help="continue training from a checkpoint file")
     parser.add_argument("--eval-episodes", type=int, default=50)
     parser.add_argument("--hp", default="{}", help='hyper-parameter overrides as JSON, e.g. \'{"learningRate": 0.0005}\'')
@@ -47,24 +51,30 @@ def main() -> None:
             data = json.loads(Path(args.levels_file).read_text())
             levels = data if isinstance(data, list) else data.get("levels", [data])
         else:
-            levels = starter_campaign(max(1, min(8, args.levels)))
+            levels = starter_campaign(max(1, min(11, args.levels)))
         trainer = RLTrainer(
             algorithm_id=args.algo, hyperparameters=json.loads(args.hp), levels=levels,
             seed=args.seed, max_episode_steps=args.max_episode_steps,
+            options={"curriculum": not args.no_curriculum, "augment": not args.no_augment,
+                     "stopWhenMastered": not args.no_early_stop, "masteryThreshold": args.mastery},
         )
     trainer.set_target_steps(args.steps)
 
     print(f"Training {trainer.algorithm_id.upper()} on {len(trainer.levels)} level(s) · target {args.steps:,} steps")
     start = time.time()
     last_print = 0
-    while trainer.total_steps < args.steps:
+    while trainer.total_steps < args.steps and not (trainer.options["stopWhenMastered"] and trainer.solved):
         trainer.run_chunk(min(8192, args.steps - trainer.total_steps))
         if trainer.total_steps - last_print >= 16384 or trainer.total_steps >= args.steps:
             last_print = trainer.total_steps
             s = trainer.stats()
             rate = trainer.total_steps / max(1e-6, time.time() - start)
             print(f"{trainer.total_steps:>9,} steps · {rate:,.0f} steps/s · level-clear {s['successRate']:.0%}"
-                  f" · reward {s['meanReward']:.1f} · deaths {s['meanDeaths']:.2f}", flush=True)
+                  f" · reward {s['meanReward']:.1f} · deaths {s['meanDeaths']:.2f}"
+                  f" · unlocked {s['curriculum']['unlocked']}/{s['curriculum']['count']}", flush=True)
+
+    if trainer.solved:
+        print(f"\nAll levels mastered after {trainer.total_steps:,} steps ({time.time() - start:.0f} s).")
 
     result = trainer.evaluate(args.eval_episodes)
     print("\nEvaluation (greedy, real game rules, full campaign):")

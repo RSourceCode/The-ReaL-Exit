@@ -65,8 +65,8 @@ export class RLClient {
     return this._request('/api/train/init', 'POST', config);
   }
 
-  async startTraining(targetSteps = 50000, stepBudget = 2048) {
-    return this._request('/api/train/start', 'POST', { targetSteps, stepBudget });
+  async startTraining(targetSteps = 50000, stepBudget = 2048, options = null) {
+    return this._request('/api/train/start', 'POST', { targetSteps, stepBudget, options });
   }
 
   async getTrainingStatus() {

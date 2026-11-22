@@ -6,7 +6,7 @@ import unittest
 import numpy as np
 
 from backend.config import ACTIONS, OBSERVATION_SIZE, SCALAR_FEATURES, STATIC_CHANNELS, LOCAL_VIEW_CHANNELS, LOCAL_VIEW_SIZE
-from backend.levels import expand_level, make_level, migrate_level, starter_campaign
+from backend.levels import LEGACY_SPECS, expand_level, legacy_campaign, make_level, migrate_level, mirror_level, starter_campaign
 from backend.rl.environment import WorldEnvironment
 from backend.rl.registry import get_algorithm
 from backend.rl.trainer import RLTrainer
@@ -77,7 +77,7 @@ class TestEnvironment(unittest.TestCase):
         self.assertTrue(mask[8])  # wait is always fine
 
     def test_danger_layers_see_the_rotating_bar(self):
-        level = {**starter_campaign(1)[0], "start": [8, 10]}  # two cells from the bar's hub at (8, 12)
+        level = {**legacy_campaign(1)[0], "start": [8, 10]}  # two cells from the bar's hub at (8, 12)
         env = WorldEnvironment([level], {"seed": 3})
         flagged = 0
         for _ in range(12):
@@ -102,7 +102,7 @@ class TestEnvironment(unittest.TestCase):
         self.assertTrue(env.step(0)["death"])  # unmasked step into lava still kills
 
     def test_random_start_level(self):
-        env = WorldEnvironment(starter_campaign(4), {"seed": 5, "randomStartLevel": True})
+        env = WorldEnvironment(legacy_campaign(4), {"seed": 5, "randomStartLevel": True})
         seen = {env.reset() is not None and env.level_index for _ in range(40)}
         self.assertGreater(len(seen), 1)
 
@@ -147,7 +147,7 @@ class TestAgents(unittest.TestCase):
 class TestLearning(unittest.TestCase):
     def test_ppo_learns_the_starter_campaign_quickly(self):
         """The regression test for the whole redesign: ~100k steps must be enough."""
-        campaign = starter_campaign()
+        campaign = legacy_campaign()
         # the crate-on-a-hold-button puzzle (level 2) needs far more than 100k steps from scratch; the solver covers it
         levels = [campaign[0], campaign[2], campaign[3]]
         trainer = RLTrainer(algorithm_id="ppo", levels=levels, seed=4, max_episode_steps=300)
@@ -159,19 +159,19 @@ class TestLearning(unittest.TestCase):
 
 class SkywayFeatureTests(unittest.TestCase):
     def test_every_campaign_level_loads_and_observes(self):
-        for level in starter_campaign():
+        for level in legacy_campaign():
             env = WorldEnvironment([level], {"seed": 1})
             obs = env.reset()
             self.assertEqual(obs.shape[0], OBSERVATION_SIZE)
 
     def test_ledge_jump_gains_height_and_plate_on_top_counts(self):
-        level = starter_campaign(1)[0]
+        level = legacy_campaign(1)[0]
         env = WorldEnvironment([level], {"seed": 2})
         env.reset()
         self.assertGreater(len(level["platforms"]), 0)
 
     def test_lift_top_is_periodic_and_rests_when_unpowered(self):
-        env = WorldEnvironment([starter_campaign()[4]], {"seed": 1})
+        env = WorldEnvironment([legacy_campaign()[4]], {"seed": 1})
         env.reset()
         env.lever_on = False
         self.assertEqual(env.lift_top(0, 3.0), env.lift_top(0, 9.0))
@@ -182,7 +182,7 @@ class SkywayFeatureTests(unittest.TestCase):
 
 class LabHazardTests(unittest.TestCase):
     def _env(self, **fields):
-        level = make_level(0)
+        level = make_level(0, LEGACY_SPECS)
         level.update({"walls": [], "platforms": [], "plates": [], "rotators": [], "hazards": [], "lasers": [], "shocks": [], "cutters": [], "spikes": []})
         level.update(fields)
         env = WorldEnvironment([level], {"seed": 1})
@@ -216,7 +216,7 @@ class LabHazardTests(unittest.TestCase):
         self.assertGreaterEqual(len(seen), 3)
 
     def test_resize_expands_footprints_and_migration_upgrades_old_levels(self):
-        level = make_level(0)
+        level = make_level(0, LEGACY_SPECS)
         level["walls"] = [[3, 3]]
         level["objectProperties"] = {"wall:3:3": {"w": 3, "d": 2, "height": 1.0}}
         grown = expand_level(level)
@@ -275,29 +275,85 @@ class WorldSizeTests(unittest.TestCase):
         self.assertEqual(level["exitDoor"], [6, 12])
 
 
-LONG_LEVEL_SOLUTIONS = {
-    6: [0, 3, 3, 3, 5, 6, 0, 0, 0, 0, 0, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 6, 2, 2, 2, 2, 1, 1, 1, 2, 2, 4, 4, 6, 0, 0, 0, 0, 0, 3, 3, 1, 1, 1, 1, 1, 3, 1, 1, 1, 1, 1, 1, 1],
-    7: [0, 0, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0, 2, 2, 2, 2, 4, 0, 0, 0, 0, 0, 0, 3, 3, 3, 1, 1, 1, 3, 3, 4, 4, 6, 0, 0, 0, 0, 0, 2, 2, 6, 1, 2, 2, 2, 7, 1, 1, 1, 1, 1, 4, 6, 6, 4, 4, 1, 3, 4, 4, 0, 4, 3, 4, 4, 0, 2],
-    8: [0, 0, 3, 4, 4, 4, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 2, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 4, 3, 0, 3, 3, 6, 3, 1, 3, 3],
-    9: [0, 0, 3, 6, 6, 6, 0, 3, 3, 3, 3, 3, 5, 6, 6, 6, 6, 0, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 4, 4, 6, 0, 0, 0, 3, 3, 3, 3, 3, 1, 7, 1, 1, 1, 1, 1, 1, 1, 5, 6, 4, 4, 4, 4, 4, 4, 4, 4, 8, 6, 0, 0, 6, 0],
-}
+def _kinds(level):
+    """Which gameplay ingredients a level uses (for checking the curriculum introduces them one at a time)."""
+    k = set()
+    for field, name in (("plates", "button"), ("ice", "ice"), ("water", "water"), ("hazards", "acid"), ("spikes", "spikes"),
+                        ("lasers", "laser"), ("shocks", "shock"), ("cutters", "cutter"), ("rotators", "spinner"),
+                        ("blocks", "crate"), ("lifts", "lift"), ("powerups", "boost")):
+        if level.get(field):
+            k.add(name)
+    if len(level.get("walls", [])) > 2 * (level["width"] + level["depth"]) - 5:
+        k.add("walls")
+    return k
 
 
-class LongLevelSolutionTests(unittest.TestCase):
-    """Levels 7-10 are long and winding.  These recorded action lists (found with solver.py) must still clear them."""
+class CurriculumTests(unittest.TestCase):
+    """The campaign is a curriculum: simple first, one new idea per level, and every room (and its mirror image) can be won."""
 
-    def test_recorded_solutions_clear_the_long_levels(self):
-        for index, actions in LONG_LEVEL_SOLUTIONS.items():
-            level = make_level(index)
-            env = WorldEnvironment([level], {"seed": 3, "randomPhase": False})
-            env.reset(0)
-            result = None
-            for action in actions:
-                result = env.step(action)
-                self.assertFalse(result["death"], f"{level['name']}: died during the recorded run")
-                if result["done"]:
-                    break
-            self.assertTrue(result and result["done"] and result["success"], f"{level['name']}: recorded run no longer clears the level")
+    def test_each_level_adds_at_most_one_new_idea(self):
+        seen = set()
+        for index, level in enumerate(starter_campaign()):
+            new = _kinds(level) - seen
+            allowed = 2 if level["name"] in ("Press the Button", "Ice & Pond", "Saw & Spinner") else 1
+            self.assertLessEqual(len(new), allowed, f"{level['name']} introduces too much at once: {sorted(new)}")
+            if index == 0:
+                self.assertEqual(_kinds(level), set(), "the first level is just the door")
+            seen |= _kinds(level)
+        self.assertLessEqual(len(starter_campaign()), 12, "keep the campaign short: training time grows with every level")
+
+    def test_every_level_and_its_mirror_image_is_solvable(self):
+        from backend.tests.solver import solve_level
+        for level in starter_campaign():
+            for variant in (level, mirror_level(level)):
+                self.assertIsNotNone(solve_level(variant, max_nodes=40000, weight=6.0), f"{variant['name']} cannot be solved")
+
+    def test_mirroring_twice_returns_the_original(self):
+        for level in starter_campaign():
+            twice = mirror_level(mirror_level(level))
+            for field in ("walls", "coins", "plates", "hazards", "lasers", "shocks", "cutters", "spikes", "ice", "water", "lifts", "blocks", "levers"):
+                self.assertEqual(sorted(map(tuple, level[field])), sorted(map(tuple, twice[field])), field)
+            self.assertEqual((level["start"], level["exitDoor"]), (twice["start"], twice["exitDoor"]))
+
+
+class CurriculumTrainerTests(unittest.TestCase):
+    def test_curriculum_unlocks_levels_in_order_and_samples_only_unlocked_ones(self):
+        from backend.rl.trainer import Curriculum
+        c = Curriculum(4, True, window=10, threshold=0.9, min_episodes=5)
+        self.assertEqual(c.unlocked, 1)
+        self.assertEqual({c.sample() for _ in range(50)}, {0})
+        unlocked_now = [c.record(0, True) for _ in range(5)]
+        self.assertTrue(unlocked_now[-1])
+        self.assertEqual(c.unlocked, 2)
+        self.assertEqual({c.sample() for _ in range(200)}, {0, 1})
+        self.assertFalse(c.mastered_in_training())
+        for level in (1, 2, 3):
+            for _ in range(5):
+                c.record(level, True)
+        self.assertEqual(c.unlocked, 4)
+        for _ in range(5):
+            c.record(3, True)
+        self.assertTrue(c.mastered_in_training())
+
+    def test_training_masters_the_first_levels_and_stops_by_itself(self):
+        campaign = starter_campaign(4)
+        trainer = RLTrainer("ppo", {}, campaign, seed=17, options={"masteryThreshold": 0.9})
+        trainer.set_target_steps(150000)
+        while trainer.total_steps < 150000 and not trainer.solved:
+            trainer.run_chunk(2048)
+        self.assertTrue(trainer.solved, "four easy levels should be mastered well inside 150k steps")
+        self.assertEqual(trainer.curriculum.unlocked, 4)
+        self.assertEqual(trainer.stats()["curriculum"]["count"], 4)
+        self.assertTrue(all(r >= 0.9 for r in trainer.verification["rates"]))
+        restored = RLTrainer(checkpoint=json.loads(json.dumps(trainer.serialize())))
+        self.assertTrue(restored.solved)
+        self.assertEqual(restored.curriculum.unlocked, 4)
+
+    def test_training_levels_include_mirrored_copies(self):
+        trainer = RLTrainer("random", {}, starter_campaign(3), seed=1)
+        self.assertEqual(len(trainer.train_levels), 6)
+        trainer.run_chunk(256)
+        self.assertEqual(len(trainer.parallel_envs[0].levels), 6)
 
 
 if __name__ == "__main__":

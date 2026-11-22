@@ -64,6 +64,7 @@ class BackendApp:
                 max_episode_steps=int(data.get("maxEpisodeSteps", 300)),
                 checkpoint=checkpoint,
                 rewards=data.get("rewards"),
+                options=data.get("options"),
             )
             self.training_state = "initialized"
             self.training_error = None
@@ -82,6 +83,10 @@ class BackendApp:
             if self.training_thread and self.training_thread.is_alive():
                 raise ValueError("Training is already running.")
             self.training_target_steps = max(self.trainer.total_steps + 1, int(data.get("targetSteps", 300000)))
+            if isinstance(data.get("options"), dict) and "stopWhenMastered" in data["options"]:
+                self.trainer.options["stopWhenMastered"] = bool(data["options"]["stopWhenMastered"])
+            self.trainer.solved = False            # pressing Start again always trains on (the check re-runs as it goes)
+            self.trainer._last_check = self.trainer.total_steps
             self.trainer.set_target_steps(self.training_target_steps)
             self.training_chunk_size = max(64, min(8192, int(data.get("stepBudget", 2048))))
             self.training_stop.clear()
@@ -109,7 +114,7 @@ class BackendApp:
                     self.trainer.run_chunk(min(self.training_chunk_size, remaining))
                     with self.progress_lock:
                         self.training_progress = copy.deepcopy(self.trainer.stats())
-                    if self.trainer.total_steps >= self.training_target_steps:
+                    if self.trainer.total_steps >= self.training_target_steps or (self.trainer.options["stopWhenMastered"] and self.trainer.solved):
                         self.training_state = "complete"
                         return
                 # Yield between batches so pause/stop requests and progress polls are responsive.
@@ -172,7 +177,7 @@ class BackendApp:
             if self.training_state in ("running", "paused", "stopping"):
                 raise ValueError("Use the background training controls while a run is active.")
             chunk_result = self.trainer.run_chunk(step_budget)
-            is_complete = self.trainer.total_steps >= target_steps
+            is_complete = self.trainer.total_steps >= target_steps or (self.trainer.options["stopWhenMastered"] and self.trainer.solved)
         return {
             "status": "complete" if is_complete else "running",
             "isComplete": is_complete,

@@ -268,3 +268,21 @@ aside .panel-head h2 { color: var(--ink); }
   .home-title { left: 20px; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }
+
+/* ── AI Lab: curriculum options + level mastery chips ───────────────────────────────────────── */
+.rl-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px; margin: 14px 0 6px; align-items: start; }
+.rl-check { display: flex; gap: 11px; align-items: flex-start; padding: 12px 14px; border-radius: 14px; background: rgba(255, 255, 255, 0.06); border: 1px solid var(--glass-line); cursor: pointer; transition: border-color 0.2s, background 0.2s; }
+.rl-check:hover { border-color: rgba(127, 231, 255, 0.5); background: rgba(127, 231, 255, 0.08); }
+.rl-check input { width: 18px; height: 18px; margin-top: 2px; accent-color: var(--accent); flex: none; }
+.rl-check span { font-size: 12px; line-height: 1.5; color: var(--ink-dim); }
+.rl-check b { display: block; font-size: 13px; color: var(--ink); margin-bottom: 1px; }
+.curriculum { display: grid; gap: 7px; }
+.curriculum-chip { position: relative; display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 11px; overflow: hidden; font-size: 12.5px; background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.1); }
+.curriculum-chip span, .curriculum-chip b { position: relative; z-index: 1; }
+.curriculum-chip b { font: 700 11.5px 'DM Mono', monospace; color: var(--ink-dim); }
+.curriculum-chip i { position: absolute; left: 0; bottom: 0; height: 3px; background: #ffc857; transition: width 0.6s var(--ease); }
+.curriculum-chip.learning { border-color: rgba(255, 200, 87, 0.45); }
+.curriculum-chip.mastered { border-color: rgba(101, 224, 189, 0.7); background: rgba(101, 224, 189, 0.12); }
+.curriculum-chip.mastered i { background: var(--good); }
+.curriculum-chip.mastered b { color: var(--good); }
+.curriculum-chip.locked { opacity: 0.45; }

@@ -11,6 +11,7 @@ import {
   HALF_X,
   HALF_Z,
   CAMPAIGN_SPECS,
+  CAMPAIGN_VERSION,
   DOOR_CLEAR,
   doorSide,
   activateWorld,
@@ -580,7 +581,7 @@ export class GameManager {
 
   saveWorld(showMessage = true, toast = null) {
     try {
-      localStorage.setItem(SAVE_KEY, JSON.stringify({ version: 2, builtinSeen: CAMPAIGN_SPECS.length, levels: this.campaignLevels }));
+      localStorage.setItem(SAVE_KEY, JSON.stringify({ version: 3, campaignVersion: CAMPAIGN_VERSION, levels: this.campaignLevels }));
       if (showMessage && toast) toast('Levels saved on this computer');
     } catch {
       if (toast) toast('Could not save this world');

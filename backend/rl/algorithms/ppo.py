@@ -25,14 +25,14 @@ from backend.rl.nn import Adam, RunningMeanStd, orthogonal, softmax
 METADATA = {
     "id": "ppo",
     "name": "PPO · Actor-Critic Network",
-    "description": "Neural-network PPO with GAE on the egocentric view. Recommended: reaches a high clear rate in a few hundred thousand steps.",
+    "description": "Neural-network PPO with GAE on the egocentric view. Recommended: with the curriculum it masters every level in roughly 60-150 thousand steps.",
     "defaults": {
         "learningRate": 0.001,
         "discount": 0.99,
         "gaeLambda": 0.95,
-        "rolloutSteps": 16,
+        "rolloutSteps": 32,
         "epochs": 4,
-        "miniBatchSize": 64,
+        "miniBatchSize": 128,
         "clipRange": 0.2,
         "entropy": 0.02,
         "valueCoef": 0.5,

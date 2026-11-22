@@ -271,12 +271,12 @@
                     </select></label
                   >
                   <label class="rl-field"
-                    >Training timesteps<input
+                    >Max training timesteps<input
                       id="rlTimesteps"
                       type="number"
                       min="1000"
                       step="1000"
-                      value="200000"
+                      value="300000"
                   /></label>
                   <label class="rl-field"
                     >Headless batch speed<select id="rlSpeed">
@@ -301,6 +301,12 @@
                     >Random seed<input id="rlSeed" type="number" value="17"
                   /></label>
                 </div>
+                <div class="rl-options">
+                  <label class="rl-check"><input id="rlCurriculum" type="checkbox" checked /><span><b>Curriculum</b>Start on the first level and unlock the next one as soon as the agent clears the newest reliably.</span></label>
+                  <label class="rl-check"><input id="rlAugment" type="checkbox" checked /><span><b>Mirror levels</b>Also train on left-right mirrored copies, so the agent learns ideas rather than sides.</span></label>
+                  <label class="rl-check"><input id="rlEarlyStop" type="checkbox" checked /><span><b>Stop when mastered</b>Finish by itself once every level is cleared reliably (and double-checked without exploration).</span></label>
+                  <label class="rl-field">Mastery target<select id="rlMastery"><option value="0.9">90% of attempts</option><option value="0.95" selected>95% of attempts</option><option value="0.98">98% of attempts</option></select></label>
+                </div>
                 <p class="rl-description" id="rlAlgorithmDescription"></p>
                 <div class="label rl-subhead">AGENT PERCEPTION</div>
                 <p class="rl-description">
@@ -319,10 +325,10 @@
                 <p class="rl-description">
                   “Progress” is potential-based shaping on the true shortest-path
                   distance to the current goal, so it speeds up learning without
-                  changing which behaviour is best. Every episode starts on a
-                  random level with a random bar phase; finishing with more time
-                  left earns a larger speed bonus. Values are saved in the
-                  checkpoint.
+                  changing which behaviour is best. Every episode is one attempt at
+                  one level (chosen by the curriculum, sometimes mirrored) with a
+                  random obstacle phase; finishing with more time left earns a
+                  larger speed bonus. Values are saved in the checkpoint.
                 </p>
                 <div class="rl-form-grid" id="rlRewards"></div>
                 <div class="label rl-subhead">AGENT ACTIONS</div>
@@ -361,6 +367,10 @@
                 <div class="rl-progress"><i id="rlProgressBar"></i></div>
               </article>
               <div class="rl-side">
+                <article class="surface-card rl-card">
+                  <div class="label">CURRICULUM <span id="rlCurriculumNote" style="float: right"></span></div>
+                  <div class="curriculum" id="rlCurriculumList"></div>
+                </article>
                 <article class="surface-card rl-card">
                   <div class="label">TRAINING PROGRESS</div>
                   <div class="rl-metrics">

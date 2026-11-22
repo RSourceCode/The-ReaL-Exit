@@ -48,6 +48,8 @@ def solve_level(level: Dict[str, Any], max_nodes: int = 60000, weight: float = 1
                 continue
             new_state = env.capture()
             h = env._dist_at(env.position[0], env.position[1])
-            h = 0.0 if h >= 1e8 else h
+            # Stage-aware: a state that has already opened the door / pulled the lever is *closer* to done even though
+            # the compass distance jumps up when the objective switches.  Without this the search stalls at the button.
+            h = (0.0 if h >= 1e8 else h) + 30.0 * (not env.doors_open) + 30.0 * (not env.lever_on)
             heapq.heappush(heap, (env.level_steps + weight * h, next(counter), env.level_steps, new_state, path + [action]))
     return None
