@@ -581,7 +581,7 @@ export class GameManager {
 
   saveWorld(showMessage = true, toast = null) {
     try {
-      localStorage.setItem(SAVE_KEY, JSON.stringify({ version: 3, campaignVersion: CAMPAIGN_VERSION, levels: this.campaignLevels }));
+      localStorage.setItem(SAVE_KEY, JSON.stringify({ version: 4, campaignVersion: CAMPAIGN_VERSION, levels: this.campaignLevels }));
       if (showMessage && toast) toast('Levels saved on this computer');
     } catch {
       if (toast) toast('Could not save this world');

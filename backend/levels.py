@@ -24,6 +24,7 @@ import copy
 from typing import Any, Dict, List, Optional
 
 from backend.levels_curriculum import CURRICULUM_SPECS
+from backend.levels_expert import EXPERT_SPECS
 
 GRID_SIZE = 17
 EXIT_DOOR = [GRID_SIZE // 2, GRID_SIZE - 1]
@@ -222,8 +223,9 @@ LEGACY_SPECS[5].setdefault("levers", []).append([4, 14])
 LEGACY_SPECS[5]["hint"] += " The pink lever (E) powers down the shocks."
 _wire(LEGACY_SPECS[5], "levers", [4, 14], [("shocks", [7, 15]), ("shocks", [8, 15]), ("shocks", [9, 15])])
 
-# The campaign: an 11-level curriculum, one new element per level (see levels_curriculum.py).
-CAMPAIGN_SPECS: List[Dict[str, Any]] = CURRICULUM_SPECS
+# The campaign: an 11-level curriculum (one new element per level, levels_curriculum.py) followed by the six
+# expert rooms that combine everything under tighter timing (levels_expert.py).
+CAMPAIGN_SPECS: List[Dict[str, Any]] = CURRICULUM_SPECS + EXPERT_SPECS
 
 # Fields whose cells can be stretched with ``objectProperties[kind:x:z] = {"w": n, "d": m}``.
 RESIZABLE = (("walls", "wall"), ("platforms", "platform"), ("hazards", "hazard"), ("ice", "ice"), ("water", "water"))

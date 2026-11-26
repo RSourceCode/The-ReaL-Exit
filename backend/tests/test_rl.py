@@ -293,18 +293,18 @@ class CurriculumTests(unittest.TestCase):
 
     def test_each_level_adds_at_most_one_new_idea(self):
         seen = set()
-        for index, level in enumerate(starter_campaign()):
+        for index, level in enumerate(starter_campaign(11)):
             new = _kinds(level) - seen
             allowed = 2 if level["name"] in ("Press the Button", "Ice & Pond", "Saw & Spinner") else 1
             self.assertLessEqual(len(new), allowed, f"{level['name']} introduces too much at once: {sorted(new)}")
             if index == 0:
                 self.assertEqual(_kinds(level), set(), "the first level is just the door")
             seen |= _kinds(level)
-        self.assertLessEqual(len(starter_campaign()), 12, "keep the campaign short: training time grows with every level")
+        self.assertLessEqual(len(starter_campaign()), 18, "keep the campaign short: training time grows with every level")
 
     def test_every_level_and_its_mirror_image_is_solvable(self):
         from backend.tests.solver import solve_level
-        for level in starter_campaign():
+        for level in starter_campaign(11):
             for variant in (level, mirror_level(level)):
                 self.assertIsNotNone(solve_level(variant, max_nodes=40000, weight=6.0), f"{variant['name']} cannot be solved")
 
@@ -314,6 +314,74 @@ class CurriculumTests(unittest.TestCase):
             for field in ("walls", "coins", "plates", "hazards", "lasers", "shocks", "cutters", "spikes", "ice", "water", "lifts", "blocks", "levers"):
                 self.assertEqual(sorted(map(tuple, level[field])), sorted(map(tuple, twice[field])), field)
             self.assertEqual((level["start"], level["exitDoor"]), (twice["start"], twice["exitDoor"]))
+
+
+EXPERT_SOLUTIONS = {"11": [0, 0, 3, 3, 3, 0, 0, 0, 0, 2, 2, 2, 2, 0, 0, 0, 0, 3, 0], "12": [0, 0, 3, 3, 3, 3, 3, 1, 1, 2, 0, 3, 0, 2, 2, 2, 2, 2, 2, 2, 2, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 3, 0, 0, 3, 3, 0], "13": [0, 2, 2, 2, 0, 0, 2, 0, 3, 3, 1, 3, 0, 0, 0, 0, 0, 3, 0, 2, 2, 1, 1, 1, 3, 1, 1, 1, 1, 1, 1, 3, 3, 3, 3, 3, 0, 0, 0, 3, 0, 2, 2, 2, 1, 2, 0, 0, 0, 0, 0, 2, 0, 3, 3, 0, 0, 0, 2, 2, 0], "14": [0, 0, 0, 3, 3, 3, 0, 0, 0, 0, 0, 2, 2, 4, 6, 6, 6, 1, 1, 1, 3, 3, 0, 3, 3, 3], "15": [0, 0, 0, 6, 6, 6, 6, 6, 0, 0, 0], "16": [0, 0, 0, 3, 3, 3, 3, 5, 6, 0, 0, 0, 0, 2, 2, 2, 0, 2, 1, 1, 1, 1, 2, 1, 0, 3, 4, 2, 2, 2, 2, 2, 0, 0, 0, 2, 2, 0, 0, 0, 0, 3, 3, 3, 3, 3, 3, 3, 3, 5, 6, 6, 6, 1, 1, 1, 2, 2, 0, 0, 2, 4, 6, 0, 0]}
+FINALE_MIRROR_SOLUTION = [0, 0, 0, 2, 2, 2, 2, 4, 6, 0, 0, 0, 0, 3, 3, 3, 0, 3, 1, 1, 1, 1, 3, 1, 0, 2, 4, 2, 2, 2, 2, 2, 1, 1, 1, 2, 2, 1, 1, 1, 1, 3, 3, 3, 3, 3, 3, 3, 3, 5, 6, 6, 6, 1, 1, 1, 3, 3, 0, 0, 3, 3, 3, 3, 3]
+_MIRROR_ACTION = {2: 3, 3: 2, 4: 5, 5: 4}     # strafe left/right and turn left/right swap in a mirror image
+
+
+def _replay(level, actions):
+    env = WorldEnvironment([level], {"seed": 3, "randomPhase": False})
+    env.reset(0)
+    result = None
+    for action in actions:
+        result = env.step(action)
+        if result["death"]:
+            return False
+        if result["done"] and result["success"]:
+            return True
+    return bool(result and result["done"] and result["success"])
+
+
+class ExpertLevelTests(unittest.TestCase):
+    """Levels 12-17 (crate puzzles and pillar climbs).  Recorded winning runs - found with solver.py / a phased search -
+    must still win, on the level and on its mirror image."""
+
+    def test_recorded_solutions_win_each_expert_level(self):
+        campaign = starter_campaign()
+        self.assertGreaterEqual(len(campaign), 17)
+        for key, actions in EXPERT_SOLUTIONS.items():
+            level = campaign[int(key)]
+            self.assertTrue(_replay(level, actions), f"{level['name']}: recorded run no longer wins")
+            mirrored = mirror_level(level)
+            mirror_actions = FINALE_MIRROR_SOLUTION if level["name"] == "Grand Finale" else [_MIRROR_ACTION.get(a, a) for a in actions]
+            self.assertTrue(_replay(mirrored, mirror_actions), f"{level['name']} (mirrored): recorded run no longer wins")
+
+    def test_crate_plan_leads_behind_the_crate_then_into_it(self):
+        env = WorldEnvironment([starter_campaign()[11]], {"seed": 1, "randomPhase": False})   # One Push
+        env.reset(0)
+        self.assertEqual(env._crate_total, 1)
+        crate = next(iter(env.blocks))
+        stand = env._targets[0]
+        self.assertNotEqual(stand, crate)                         # first it sends the walker to the cell behind the crate…
+        self.assertEqual(abs(stand[0] - crate[0]) + abs(stand[1] - crate[1]), 1)
+        env.position = list(stand)
+        env._refresh_objective()
+        self.assertEqual(env._targets, [crate])                   # …and once there, into the crate
+
+    def test_hold_button_and_door_bonuses_are_paid_once(self):
+        """Stepping on and off a hold-button must not be a way to farm reward (the agent found exactly that)."""
+        level = {**starter_campaign()[11]}
+        env = WorldEnvironment([level], {"seed": 1, "randomPhase": False})
+        env.reset(0)
+        plate = env.plates[0]
+        env.blocks = set()                          # no crate: only Deeba can press it
+        env._sync_dynamic()
+        paid = 0.0
+        for _ in range(6):                          # on, off, on, off, on, off
+            for cell, flag in ((tuple(plate), True), ((plate[0] + 1, plate[1]), False)):
+                env.position = [cell[0], cell[1]]
+                result = env.step(8)                # wait a tick
+                paid += result["reward"] if result["reward"] > 1.0 else 0.0
+        self.assertLessEqual(paid, 8.0, "plate / door bonuses were paid repeatedly")
+
+    def test_pillars_need_consecutive_jumps(self):
+        level = starter_campaign()[14]              # Pillar Steps
+        heights = sorted(v["height"] for k, v in level["objectProperties"].items() if k.startswith("platform:"))
+        self.assertEqual(len(heights), 3)
+        self.assertTrue(all(b - a <= 1.3 for a, b in zip([0.0] + heights, heights)), "each step must be within one jump")
+        self.assertTrue(all(b - a >= 0.6 for a, b in zip([0.0] + heights, heights)), "steps are too low to count as jumps")
 
 
 class CurriculumTrainerTests(unittest.TestCase):

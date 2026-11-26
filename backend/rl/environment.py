@@ -28,6 +28,7 @@ What makes this environment *learnable* (compared with a raw 7x7 view):
 
 import heapq
 import math
+from collections import deque
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
@@ -77,7 +78,7 @@ WALL_TOP_PAD = 0.09
 CLIMBABLE_WALL_HEIGHT = 1.25  # inner walls up to this height count as low walls (ledges)
 STEP_MAX = 0.3              # highest step that can simply be walked up
 JUMP_REACH = 1.5            # highest surface a standing jump can reach
-MAX_HEIGHT = 2.4            # observation normaliser
+MAX_HEIGHT = 3.2            # observation normaliser (pillars are up to ~2.5 m high)
 ROTATOR_HALF_LENGTH = 1.04
 ROTATOR_HALF_THICKNESS = 0.16
 PLAYER_CENTER_Y = 0.42
@@ -232,6 +233,12 @@ class WorldEnvironment:
         self._dist: List[float] = []
         self._dist_np = np.zeros((1, 1))
         self._targets: List[Cell] = []
+        self._crates_solid = False      # while planning a crate push the crates themselves are obstacles for the walker
+        self._crate_left: Optional[int] = None   # pushes still needed by the current crate plan (None = no plan)
+        self._crate_total = 0                    # pushes still needed over *all* unfinished hold-buttons
+        self._crate_holds = 0                    # how many hold-buttons still need a crate
+        self._crate_stand: Optional[Cell] = None # the cell to push from, while a crate plan is active
+        self._at_stand = False
         self._plates_remaining = 0
         self._lever_needed = False
         self._obs = np.zeros(OBSERVATION_SIZE, dtype=np.float32)
@@ -298,6 +305,7 @@ class WorldEnvironment:
         self.continuous_plates = {(int(c[0]), int(c[1])) for c in level.get("continuousPlates", [])}
         self.plate_mask = 0
         self._plate_paid: Set[int] = set()
+        self._door_paid = False
         self.coins = [[int(c[0]), int(c[1])] for c in level.get("coins", [])[:MAX_TRACKED]]
         self.coin_mask = 0
         self.switches = [[int(c[0]), int(c[1])] for c in level.get("switches", [])]
@@ -782,6 +790,8 @@ class WorldEnvironment:
         # agent then walks into the crate and shoves it ahead of itself, e.g. along a corridor onto a hold-button.
         if c in self.walls or c in self.hazards or c in self.movers or c in self.rotators:
             return False
+        if self._crates_solid and c in self.blocks:
+            return False
         if c == self._exit_door_key and not self.doors_open:
             return False
         return True
@@ -829,6 +839,50 @@ class WorldEnvironment:
                         heapq.heappush(heap, (d + JUMP_COST, ax, az))
         return dist
 
+    def _crate_plan(self, plate: Cell) -> Optional[Tuple[int, Cell, Cell, Cell]]:
+        """Shortest push sequence that brings a crate onto ``plate``: (pushes, crate cell, push direction, cell to push from).
+
+        BFS over the *crate's* cell (the walker is assumed able to get behind it; the walker's own route to the push
+        cell is planned afterwards).  A crate may not be pushed into walls, acid, ledges, other crates or the door.
+        """
+        sx, sz = self.size_x, self.size_z
+        ledges = self.static_height
+
+        def crate_ok(c: Cell, others: Set[Cell]) -> bool:
+            return (0 <= c[0] < sx and 0 <= c[1] < sz and c not in self.walls and c not in self.hazards
+                    and c not in self.rotators and c not in self.movers and c not in ledges and c not in others
+                    and c != self._exit_door_key)
+
+        def walker_ok(c: Cell) -> bool:
+            return 0 <= c[0] < sx and 0 <= c[1] < sz and c not in self.walls and c not in self.hazards
+
+        best: Optional[Tuple[int, Cell, Cell, Cell]] = None
+        for crate in self.blocks:
+            if crate == plate or crate in self.continuous_plates:   # a crate already holding a button is done
+                continue
+            others = self.blocks - {crate}
+            first: Dict[Cell, Cell] = {}
+            seen = {crate}
+            queue = deque([(crate, 0)])
+            found = None
+            while queue and found is None:
+                c, d = queue.popleft()
+                for fx, fz in _DIRS:
+                    n = (c[0] + fx, c[1] + fz)
+                    back = (c[0] - fx, c[1] - fz)
+                    if n in seen or not crate_ok(n, others) or not walker_ok(back):
+                        continue
+                    seen.add(n)
+                    first[n] = first.get(c, (fx, fz)) if c != crate else (fx, fz)
+                    if n == plate:
+                        found = d + 1
+                        break
+                    queue.append((n, d + 1))
+            if found is not None and (best is None or found < best[0]):
+                fd = first[plate]
+                best = (found, crate, fd, (crate[0] - fd[0], crate[1] - fd[1]))
+        return best
+
     def _refresh_objective(self) -> None:
         """Recompute targets and the distance field to the nearest objective (plate -> exit).
 
@@ -840,6 +894,27 @@ class WorldEnvironment:
         if not targets:
             targets = [self._exit_door_key]
         sx, sz = self.size_x, self.size_z
+        # A hold-button that only a crate can keep pressed: the compass first leads the walker to the cell *behind the
+        # crate* (so it pushes the right way), then into the crate; after each push the plan is recomputed.  Ordinary
+        # (latching) buttons come first.
+        self._crates_solid = False
+        self._crate_left = None
+        self._crate_total = 0
+        self._crate_holds = 0
+        self._crate_stand = None
+        self._at_stand = False
+        holds = [t for t in targets if t in self.continuous_plates and t != self._exit_door_key]
+        if self.blocks and holds:                # crate puzzles first: a hold-button cannot be skipped, an ordinary one latches
+            plans = [p for p in (self._crate_plan(h) for h in holds) if p is not None]
+            if plans:
+                pushes, crate, _dir, stand = min(plans, key=lambda p: p[0])
+                self._crate_left = pushes
+                self._crate_total = sum(p[0] for p in plans)
+                self._crate_holds = len(holds)
+                self._crates_solid = True
+                self._crate_stand = stand
+                self._at_stand = tuple(self.position) == stand
+                targets = [crate] if self._at_stand else [stand]
         self._lever_needed = False
         if self.lifts and not all(self.lift_powered(i) for i in range(len(self.lifts))):
             dist = self._field(targets, False)
@@ -850,6 +925,7 @@ class WorldEnvironment:
                 self._lever_needed = True
         else:
             dist = self._field(targets, bool(self.lifts))
+        self._crates_solid = False
         self._targets = targets
         self._dist = dist
         self._dist_np = np.array(dist, dtype=np.float64).reshape(sx, sz)
@@ -1219,7 +1295,11 @@ class WorldEnvironment:
                     reward += rw["pushBlock"]
                     objective_changed = True
                     self._sync_dynamic()
+                    before_left, before_holds = self._crate_left, self._crate_holds
                     self._refresh_objective()  # a pushed block can alter the maze
+                    if before_left is not None and self._crate_left is not None and before_holds == self._crate_holds:
+                        # progress on the crate plan: +/- per push that gets the crate nearer / further from the button
+                        reward += rw.get("cratePlan", 0.4) * (before_left - self._crate_left)
 
             move_start = self.sim_time_seconds
             move_end = move_start + time_steps_used * RL_ACTION_DURATION_SECONDS
@@ -1282,13 +1362,18 @@ class WorldEnvironment:
                     pi = self._plate_key_to_idx.get(key, -1)
                     if pi >= 0 and not (self.plate_mask & (1 << pi)):
                         self.plate_mask |= 1 << pi
-                        self.total_plates += 1
-                        reward += rw["plate"]
+                        # Paid once per button: a hold-button released and pressed again must not pay out again.
+                        if pi not in self._plate_paid:
+                            self._plate_paid.add(pi)
+                            self.total_plates += 1
+                            reward += rw["plate"]
                         objective_changed = True
                         self._recompute_channels()
                         if self.door_plate_mask and (self.plate_mask & self.door_plate_mask) == self.door_plate_mask:
+                            if not self._door_paid:
+                                self._door_paid = True
+                                reward += rw["doorOpen"]
                             self.doors_open = True
-                            reward += rw["doorOpen"]
                         self._sync_dynamic()
                         self._refresh_objective()
 
@@ -1297,6 +1382,10 @@ class WorldEnvironment:
                         self.collision_count += 1
                         reward += rw["moverCollision"]
 
+
+        # While steering a crate the compass points at the cell behind it, then at the crate: refresh when that changes.
+        if self._crate_stand is not None and (tuple(self.position) == self._crate_stand) != self._at_stand:
+            self._refresh_objective()
 
         # Hold plates require the player or a movable crate to remain on the switch.
         for i, plate in enumerate(self.plates):

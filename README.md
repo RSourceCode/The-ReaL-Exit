@@ -133,23 +133,32 @@ verified by `backend/tests/solver.py`.
 
 ## Campaign as a curriculum, and training the AI
 
-The campaign is 11 small rooms ordered simple -> hard, each adding exactly one new idea: **1 First Steps** (just the door) ·
+The campaign is 17 rooms. **Levels 1-11 are a curriculum** (small rooms, one new idea each): **1 First Steps** (just the door) ·
 **2 Press the Button** · **3 Ice & Pond** · **4 Acid Hop** · **5 Spike Row** · **6 Laser Lane** · **7 Shock Gate** ·
-**8 Saw & Spinner** · **9 Crate Switch** · **10 Lift Off** · **11 Grand Exit** (a longer room with turns that uses most of it).
-Every room and its mirror image is checked solvable by `backend/tests/solver.py` (`CurriculumTests`).
+**8 Saw & Spinner** · **9 Crate Switch** · **10 Lift Off** · **11 Grand Exit**.  **Levels 12-17 are the expert tier**
+(`backend/levels_expert.py`) - puzzles that have to be worked out: **12 One Push** (the crate is one push from a button in a
+nook that only opens on one side) · **13 Box Hunt** (the crate is hidden in a side chamber, 18 pushes from the button) ·
+**14 Two Boxes** (two crates steered through one gap to two buttons) · **15 Pillar Steps** (a button on top of a three-step
+pillar: consecutive jumps) · **16 Pillar Hop** (a button on a pillar in an acid lake: hop up and down between pillars) ·
+**17 Grand Finale** (a crate through timed spikes, a pillar button and a laser at the door).
+Every room and its mirror image is verified winnable (`CurriculumTests`, `ExpertLevelTests`).
 
 **How the AI Lab trains on it** (`backend/rl/trainer.py`):
-- *Curriculum* – training starts on level 1 and unlocks the next level once the newest one is cleared reliably; half the
+- *Curriculum* - training starts on level 1 and unlocks the next level once the newest one is cleared reliably; half the
   episodes go to the newest level and the rest to whatever the agent is currently worst at, so nothing is forgotten.
-- *Mirrored levels* – every level is also played left-right mirrored half the time, so the policy learns "go round the wall"
+- *Mirrored levels* - every level is also played left-right mirrored half the time, so the policy learns "go round the wall"
   rather than "go left".
-- *Mastery + early stop* – when every level is cleared >= the mastery target (default 95%) over the recent window **and** a
-  greedy, no-exploration check (original + mirrored, random obstacle phases) confirms it, training stops by itself.
-- Faster simulation (the danger-layer observation and per-level set-up are cached/vectorised: ~2.5x more steps per second) and
-  larger PPO batches (32 x 16 envs, minibatch 128).  Typical result: all 11 levels mastered in roughly 60-160k steps (about
-  20-60 s on one CPU core).
+- *Mastery + early stop* - when every level is cleared (>= the mastery target, default 95%) and a greedy, no-exploration check
+  (original + mirrored, random obstacle phases) confirms it, training stops by itself.
+- *Crate guidance* (`WorldEnvironment._crate_plan`) - when a hold-button needs a crate, the compass first leads to the cell
+  *behind* the crate (so it is pushed the right way), then into it; the plan is a shortest-push search over the crate's own
+  cell, recomputed after every push, and each push that brings the crate nearer earns `cratePlan` reward.
+- *No reward farming* - plate and door-open bonuses are paid once per button per attempt (an earlier version let the agent
+  collect them over and over by stepping on and off a hold-button, which silently stopped it learning anything else).
+- Faster simulation (~2.6x more steps/s) and larger PPO batches.  From scratch, all 17 levels are typically mastered in
+  roughly 250-400k steps (about 1.5-2.5 minutes on one CPU core).
 
 From the command line: `python -m backend.train_cli` (see `--help`; `--mastery 0.98` for a stricter target, `--no-curriculum`,
-`--no-augment`, `--no-early-stop`).  A ready-trained model is in `checkpoints/the-real-exit-curriculum-ppo.json` (load it in the
-AI Lab and press *Watch checkpoint in game*; it clears the whole campaign with no deaths).
-
+`--no-augment`, `--no-early-stop`).  A ready-trained model is in `checkpoints/the-real-exit-expert-ppo.json` (load it in the
+AI Lab and press *Watch checkpoint in game*; it clears all 17 levels).  Older checkpoints in that folder were trained on
+earlier level sets.

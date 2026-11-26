@@ -67,7 +67,7 @@ export class RLUIController {
       this.defaultRewards = {
         timeStep: -0.03, progress: 0.12, coin: 1, powerup: 1.5, plate: 3, doorOpen: 2, goal: 10,
         collision: -0.25, hazard: -2, rotatorCollision: -0.75, moverCollision: -0.5,
-        platformCollision: -0.3, invalidInteract: -0.05, pushBlock: 0.05, jumpHazard: 0.5, switch: 0.3,
+        platformCollision: -0.3, invalidInteract: -0.05, pushBlock: 0.05, cratePlan: 0.4, jumpHazard: 0.5, switch: 0.3,
         deathPenalty: -3, speedBonus: 3,
       };
       this.rewardLabels = {
@@ -75,7 +75,7 @@ export class RLUIController {
         plate: 'Press pressure plate', doorOpen: 'Open door', goal: 'Reach goal',
         collision: 'Wall collision', hazard: 'Hit hazard', rotatorCollision: 'Rotating obstacle hit',
         moverCollision: 'Moving obstacle hit', platformCollision: 'Raised platform hit',
-        invalidInteract: 'Invalid interaction', pushBlock: 'Push block', jumpHazard: 'Jump over hazard/obstacle', switch: 'Toggle switch',
+        invalidInteract: 'Invalid interaction', pushBlock: 'Push block', cratePlan: 'Crate nearer the hold-button', jumpHazard: 'Jump over hazard/obstacle', switch: 'Toggle switch',
         deathPenalty: 'Death / level restart penalty', speedBonus: 'Finish level sooner',
       };
     }
@@ -302,7 +302,7 @@ export class RLUIController {
     $('rlMeanDeaths').textContent = stats.episodes ? stats.meanDeaths.toFixed(1) : '—';
     $('rlMeanCoins').textContent = stats.episodes ? stats.coinRate.toFixed(1) : '—';
 
-    const target = Math.max(1, Number($('rlTimesteps').value) || 300000);
+    const target = Math.max(1, Number($('rlTimesteps').value) || 600000);
     const percent = Math.min(100, (stats.steps / target) * 100);
     $('rlProgressBar').style.width = `${percent}%`;
     $('rlProgressPercent').textContent = `${Math.floor(percent)}%`;
@@ -375,7 +375,7 @@ export class RLUIController {
       this.loadedCheckpoint = null;
       this.rlRunId++;
       await this.client.startTraining(
-        Math.max(1000, Number($('rlTimesteps').value) || 300000),
+        Math.max(1000, Number($('rlTimesteps').value) || 600000),
         Number($('rlSpeed').value) || 2048,
         this.currentOptions()
       );

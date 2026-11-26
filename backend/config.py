@@ -78,6 +78,7 @@ DEFAULT_REWARDS = {
     "platformCollision": -0.3,
     "invalidInteract": -0.05,
     "pushBlock": 0.02,
+    "cratePlan": 0.4,        # per push that brings a crate nearer to the hold-button (negative if further)
     "jumpHazard": 0.5,
     "switch": 0.3,
     "climb": 0.4,
@@ -104,6 +105,7 @@ REWARD_LABELS = {
     "platformCollision": "Bump into a ledge you cannot step onto",
     "invalidInteract": "Invalid interaction",
     "pushBlock": "Push block",
+    "cratePlan": "Crate nearer the hold-button (per push)",
     "jumpHazard": "Jump over hazard / laser / obstacle",
     "switch": "Pull the power lever (first time per level)",
     "climb": "Jump up onto a new ledge (first time per ledge)",

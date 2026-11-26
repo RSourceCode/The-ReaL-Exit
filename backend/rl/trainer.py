@@ -67,10 +67,13 @@ class Curriculum:
         return False
 
     def mastered_in_training(self) -> bool:
+        """Cheap pre-check on the exploring (stochastic) training attempts.  It is deliberately a little looser than the
+        target - the greedy ``verify`` pass is the real judge - so a single unlucky exploratory slip in a window of 30
+        does not keep a 98% target out of reach."""
         if self.unlocked < self.count:
             return False
         for r in self.results:
-            if len(r) < self.min_episodes or sum(r) / len(r) < self.threshold:
+            if len(r) < self.min_episodes or sum(r) / len(r) < self.threshold - 0.05:
                 return False
         return True
 
@@ -157,6 +160,7 @@ class RLTrainer:
         self.solved = bool(checkpoint.get("solved", False)) if checkpoint else False
         self.verification: Dict[str, Any] = dict(checkpoint.get("verification", {})) if checkpoint else {}
         self._last_check = 0
+        self._check_gap = 4096
 
         self.parallel_instances = max(1, int(self.hyperparameters.get("parallelInstances", 16)))
         self.parallel_envs = [
@@ -243,9 +247,10 @@ class RLTrainer:
                 self.last_learn = learned
 
         if self.options["stopWhenMastered"] and not self.solved and self.curriculum.mastered_in_training() \
-                and self.total_steps - self._last_check >= 4096:
+                and self.total_steps - self._last_check >= self._check_gap:
             self._last_check = self.total_steps
             self.solved = self.verify()["passed"]
+            self._check_gap = 4096 if self.solved else 20_000      # a failed check is expensive: wait before trying again
         return {"transitions": transitions, "newEpisodes": new_episodes, **self.stats()}
 
     # -- curriculum helpers -------------------------------------------------------------------------------------------

@@ -8,7 +8,7 @@
 
 export const GRID_SIZE = 17;               // default room size (levels may be any width x depth, see worldDims)
 export const HALF_GRID = (GRID_SIZE - 1) / 2;
-export const CAMPAIGN_VERSION = 3;     // bump when the built-in campaign changes
+export const CAMPAIGN_VERSION = 4;     // bump when the built-in campaign changes
 export const MIN_GRID = 9;
 export const MAX_GRID = 41;
 export const EXIT_OPENING_WIDTH = 1.5;     // legacy
@@ -434,6 +434,169 @@ export const CAMPAIGN_SPECS = [
     "timeLimit": 90,
     "rotatorSpeed": 1.0
   },
+  {
+    "name": "One Push",
+    "hint": "The hold-button stays pressed only while something sits on it. The crate is a single push away \u2013 you just have to get behind it.",
+    "width": 11,
+    "depth": 13,
+    "start": [5, 1],
+    "exitDoor": [5, 12],
+    "coins": [[8, 10], [6, 9], [9, 3]],
+    "walls": [[3, 8], [2, 7], [3, 6], [1, 4], [2, 4], [3, 4], [4, 4], [5, 4], [6, 4], [7, 4]],
+    "plates": [[3, 7]],
+    "continuousPlates": [[3, 7]],
+    "blocks": [[4, 7]],
+    "timeLimit": 40,
+    "rotatorSpeed": 1.0
+  },
+  {
+    "name": "Box Hunt",
+    "hint": "The button needs a crate on it \u2013 and the crate is nowhere near. Find it, get it out of its chamber, and push it all the way across.",
+    "width": 13,
+    "depth": 15,
+    "start": [6, 1],
+    "exitDoor": [6, 14],
+    "walls": [[2, 13], [1, 12], [3, 12], [4, 8], [5, 8], [6, 8], [7, 8], [8, 8], [9, 6], [10, 6], [11, 6], [9, 5], [9, 4], [9, 2], [9, 1]],
+    "plates": [[2, 12]],
+    "continuousPlates": [[2, 12]],
+    "coins": [[8, 12], [5, 11], [11, 10], [6, 4]],
+    "blocks": [[10, 2]],
+    "timeLimit": 80,
+    "rotatorSpeed": 1.0
+  },
+  {
+    "name": "Two Boxes",
+    "hint": "Two buttons, two crates, one gap in the wall: steer each crate through it and across to its button.",
+    "width": 13,
+    "depth": 15,
+    "start": [6, 1],
+    "exitDoor": [6, 14],
+    "coins": [[1, 12], [6, 12], [11, 12], [6, 8], [6, 4]],
+    "walls": [[2, 10], [10, 10], [1, 6], [2, 6], [3, 6], [4, 6], [8, 6], [9, 6], [10, 6], [11, 6]],
+    "plates": [[3, 10], [9, 10]],
+    "continuousPlates": [[3, 10], [9, 10]],
+    "blocks": [[3, 3], [10, 2]],
+    "timeLimit": 110,
+    "rotatorSpeed": 1.0
+  },
+  {
+    "name": "Pillar Steps",
+    "hint": "The button is on top of a pillar built like a staircase. Jump onto the first step, then the next, then the next \u2013 each one is higher.",
+    "width": 11,
+    "depth": 15,
+    "start": [5, 1],
+    "exitDoor": [5, 14],
+    "coins": [[6, 12], [8, 11], [9, 3]],
+    "walls": [[3, 10], [4, 10], [5, 10], [2, 9], [3, 8], [4, 8], [5, 8], [1, 5], [2, 5], [3, 5], [4, 5], [5, 5], [6, 5], [7, 5]],
+    "platforms": [[3, 9], [4, 9], [5, 9]],
+    "plates": [[3, 9]],
+    "objectProperties": {
+      "platform:5:9": {
+        "height": 0.8,
+        "size": 0.95,
+        "color": "#8fb8ff",
+        "collision": true
+      },
+      "platform:4:9": {
+        "height": 1.6,
+        "size": 0.95,
+        "color": "#7aa6f5",
+        "collision": true
+      },
+      "platform:3:9": {
+        "height": 2.4,
+        "size": 0.95,
+        "color": "#6592e8",
+        "collision": true
+      }
+    },
+    "timeLimit": 50,
+    "rotatorSpeed": 1.0
+  },
+  {
+    "name": "Pillar Hop",
+    "hint": "An acid lake, and the button on a pillar in the middle of it. Hop from pillar to pillar \u2013 up to the button, then down the other side.",
+    "width": 13,
+    "depth": 17,
+    "start": [6, 1],
+    "exitDoor": [6, 16],
+    "coins": [[4, 15], [8, 15], [4, 3], [8, 3]],
+    "hazards": [[1, 13], [2, 13], [3, 13], [4, 13], [5, 13], [7, 13], [8, 13], [9, 13], [10, 13], [11, 13], [1, 12], [2, 12], [3, 12], [4, 12], [5, 12], [6, 12], [7, 12], [8, 12], [9, 12], [10, 12], [11, 12], [1, 11], [2, 11], [3, 11], [4, 11], [5, 11], [7, 11], [8, 11], [9, 11], [10, 11], [11, 11], [1, 10], [2, 10], [3, 10], [4, 10], [5, 10], [6, 10], [7, 10], [8, 10], [9, 10], [10, 10], [11, 10], [1, 9], [2, 9], [3, 9], [4, 9], [5, 9], [7, 9], [8, 9], [9, 9], [10, 9], [11, 9], [1, 8], [2, 8], [3, 8], [4, 8], [5, 8], [6, 8], [7, 8], [8, 8], [9, 8], [10, 8], [11, 8], [1, 7], [2, 7], [3, 7], [4, 7], [5, 7], [7, 7], [8, 7], [9, 7], [10, 7], [11, 7], [1, 6], [2, 6], [3, 6], [4, 6], [5, 6], [6, 6], [7, 6], [8, 6], [9, 6], [10, 6], [11, 6], [1, 5], [2, 5], [3, 5], [4, 5], [5, 5], [7, 5], [8, 5], [9, 5], [10, 5], [11, 5]],
+    "platforms": [[6, 13], [6, 11], [6, 9], [6, 7], [6, 5]],
+    "plates": [[6, 9]],
+    "objectProperties": {
+      "platform:6:5": {
+        "height": 0.8,
+        "size": 0.95,
+        "color": "#8fb8ff",
+        "collision": true
+      },
+      "platform:6:7": {
+        "height": 1.6,
+        "size": 0.95,
+        "color": "#7aa6f5",
+        "collision": true
+      },
+      "platform:6:9": {
+        "height": 2.4,
+        "size": 0.95,
+        "color": "#6592e8",
+        "collision": true
+      },
+      "platform:6:11": {
+        "height": 1.6,
+        "size": 0.95,
+        "color": "#7aa6f5",
+        "collision": true
+      },
+      "platform:6:13": {
+        "height": 0.8,
+        "size": 0.95,
+        "color": "#8fb8ff",
+        "collision": true
+      }
+    },
+    "timeLimit": 60,
+    "rotatorSpeed": 1.0
+  },
+  {
+    "name": "Grand Finale",
+    "hint": "A crate to carry through the spikes, a pillar to climb, and a laser guarding the door. Both buttons must be pressed.",
+    "width": 15,
+    "depth": 23,
+    "start": [2, 1],
+    "exitDoor": [12, 22],
+    "coins": [[4, 20], [10, 20], [7, 16], [5, 14], [5, 10], [4, 3], [10, 3]],
+    "walls": [[1, 18], [2, 18], [3, 18], [4, 18], [5, 18], [6, 18], [7, 18], [8, 18], [9, 18], [10, 18], [11, 18], [11, 16], [12, 16], [13, 16], [11, 14], [12, 14], [13, 14], [3, 12], [4, 12], [5, 12], [6, 12], [7, 12], [8, 12], [9, 12], [10, 12], [11, 12], [12, 12], [13, 12], [2, 8], [1, 5], [2, 5], [3, 5], [4, 5], [5, 5], [6, 5], [7, 5], [8, 5], [9, 5], [10, 5], [11, 5]],
+    "platforms": [[11, 15], [12, 15], [13, 15]],
+    "plates": [[13, 15], [3, 8]],
+    "spikes": [[8, 10, 3.0], [8, 9, 3.0], [8, 8, 3.0], [8, 7, 3.0], [8, 6, 3.0], [7, 4, 3.0], [7, 3, 3.0], [7, 2, 3.0], [7, 1, 3.0]],
+    "continuousPlates": [[3, 8]],
+    "blocks": [[12, 8]],
+    "lasers": [[11, 20, "x", 2.0, 1, "z", 0.5, 1.0]],
+    "objectProperties": {
+      "platform:11:15": {
+        "height": 0.8,
+        "size": 0.95,
+        "color": "#8fb8ff",
+        "collision": true
+      },
+      "platform:12:15": {
+        "height": 1.6,
+        "size": 0.95,
+        "color": "#7aa6f5",
+        "collision": true
+      },
+      "platform:13:15": {
+        "height": 2.4,
+        "size": 0.95,
+        "color": "#6592e8",
+        "collision": true
+      }
+    },
+    "timeLimit": 150,
+    "rotatorSpeed": 1.0
+  },
 ];
 // </generated:levels>
 
@@ -498,8 +661,17 @@ export function loadCampaign() {
         // The built-in campaign is a curriculum that changes between versions: an older save gets the new built-in
         // levels, while the player's own levels (anything that is not a "catlab-N" built-in) are kept after them.
         if (saved.campaignVersion !== CAMPAIGN_VERSION) {
-          const custom = saved.levels.filter((l) => !/^catlab-\d+$/.test(String(l.id || '')));
-          saved.levels = CAMPAIGN_SPECS.map((_, i) => makeLevel(i)).concat(custom);
+          const isBuiltin = (l) => /^catlab-\d+$/.test(String(l.id || ''));
+          const custom = saved.levels.filter((l) => !isBuiltin(l));
+          let builtin = saved.levels.filter(isBuiltin);
+          if ((saved.campaignVersion || 0) >= 3) {
+            // Same curriculum, more levels: keep the player's copies of the built-ins and append the new rooms.
+            const have = new Set(builtin.map((l) => l.id));
+            CAMPAIGN_SPECS.forEach((_, i) => { if (!have.has(`catlab-${i + 1}`)) builtin.push(makeLevel(i)); });
+          } else {
+            builtin = CAMPAIGN_SPECS.map((_, i) => makeLevel(i));
+          }
+          saved.levels = builtin.concat(custom);
         }
         return saved.levels;
       }

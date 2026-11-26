@@ -29,8 +29,8 @@ from backend.rl.trainer import RLTrainer  # noqa: E402
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train a The-ReaL-Exit agent headlessly.")
     parser.add_argument("--algo", default="ppo", choices=["ppo", "dqn", "random"])
-    parser.add_argument("--steps", type=int, default=400_000, help="maximum environment steps (training stops earlier once every level is mastered)")
-    parser.add_argument("--levels", type=int, default=11, help="number of campaign levels to use (1-11)")
+    parser.add_argument("--steps", type=int, default=800_000, help="maximum environment steps (training stops earlier once every level is mastered)")
+    parser.add_argument("--levels", type=int, default=17, help="number of campaign levels to use (1-17)")
     parser.add_argument("--levels-file", help="JSON file with a list of levels (or one level)")
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--max-episode-steps", type=int, default=300)
@@ -51,7 +51,7 @@ def main() -> None:
             data = json.loads(Path(args.levels_file).read_text())
             levels = data if isinstance(data, list) else data.get("levels", [data])
         else:
-            levels = starter_campaign(max(1, min(11, args.levels)))
+            levels = starter_campaign(max(1, min(17, args.levels)))
         trainer = RLTrainer(
             algorithm_id=args.algo, hyperparameters=json.loads(args.hp), levels=levels,
             seed=args.seed, max_episode_steps=args.max_episode_steps,
