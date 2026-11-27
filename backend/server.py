@@ -16,6 +16,12 @@ if str(ROOT_DIR) not in sys.path:
 
 from backend.app import app
 from backend.config import DEFAULT_PORT
+from backend.extensions import registry
+from backend.plugin_api import ROUTES as PLUGIN_ROUTES
+
+# The Electron protocol proxy forwards only the path and the body (not the query string), so every
+# new endpoint is addressed by path and takes its arguments as a JSON body (GET and POST both work).
+EXT_PREFIX = "/api/ext/"
 
 
 class APIHandler(http.server.BaseHTTPRequestHandler):
@@ -48,6 +54,16 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _plugin_route(self, path: str, body: dict):
+        """Returns (handled, payload) for the plugin endpoints and /api/ext/<plugin>/<route>."""
+        if path in PLUGIN_ROUTES:
+            return True, PLUGIN_ROUTES[path](body)
+        if path.startswith(EXT_PREFIX):
+            parts = path[len(EXT_PREFIX):].split("/", 1)
+            if len(parts) == 2:
+                return True, registry.call(parts[0], parts[1], body)
+        return False, None
+
     def do_GET(self) -> None:
         path = urlparse(self.path).path.rstrip("/")
         try:
@@ -60,7 +76,10 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
             elif path == "/api/train/status":
                 self._send_json(200, app.handle_train_status())
             else:
-                self._send_json(404, {"error": f"Endpoint not found: {path}"})
+                handled, payload = self._plugin_route(path, {})
+                self._send_json(200 if handled else 404, payload if handled else {"error": f"Endpoint not found: {path}"})
+        except KeyError as err:
+            self._send_json(404, {"error": str(err).strip("'\"")})
         except Exception as err:
             print(f"[API] GET {path} failed: {err}", file=sys.stderr, flush=True)
             traceback.print_exc(file=sys.stderr)
@@ -89,7 +108,12 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
             elif path == "/api/playback/step":
                 self._send_json(200, app.handle_playback_step(body))
             else:
-                self._send_json(404, {"error": f"Endpoint not found: {path}"})
+                handled, payload = self._plugin_route(path, body)
+                self._send_json(200 if handled else 404, payload if handled else {"error": f"Endpoint not found: {path}"})
+        except KeyError as err:
+            self._send_json(404, {"error": str(err).strip("'\"")})
+        except ValueError as err:
+            self._send_json(400, {"error": str(err)})
         except Exception as err:
             print(f"[API] POST {path} failed: {err}", file=sys.stderr, flush=True)
             traceback.print_exc(file=sys.stderr)
@@ -102,6 +126,7 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
 
 def run_server(host: str = "127.0.0.1", port: int = DEFAULT_PORT) -> None:
     """Start the HTTP server on the specified host and port."""
+    registry.load_plugins()
     address: Tuple[str, int] = (host, port)
     server = http.server.ThreadingHTTPServer(address, APIHandler)
     print(f"The-ReaL-Exit Python Backend running on http://{host}:{port}", flush=True)
