@@ -11,6 +11,8 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from backend.app import app
+from backend.extensions import registry
+from backend.plugin_api import ROUTES as PLUGIN_ROUTES
 
 
 def handle_message(msg: Dict[str, Any]) -> Dict[str, Any]:
@@ -46,6 +48,11 @@ def handle_message(msg: Dict[str, Any]) -> Dict[str, Any]:
             result = app.handle_playback_start(data)
         elif action == "playback_step":
             result = app.handle_playback_step(data)
+        elif f"/api/{action}" in PLUGIN_ROUTES:          # e.g. "levels/validate", "dataset/export"
+            result = PLUGIN_ROUTES[f"/api/{action}"](data)
+        elif action.startswith("ext/") and action.count("/") == 2:   # "ext/<plugin>/<route>"
+            _, plugin, route = action.split("/")
+            result = registry.call(plugin, route, data)
         else:
             return {"id": req_id, "error": f"Unknown action: {action}"}
 
@@ -71,4 +78,5 @@ def run_ipc():
 
 
 if __name__ == "__main__":
+    registry.load_plugins()
     run_ipc()
